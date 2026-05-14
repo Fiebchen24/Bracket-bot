@@ -18,5 +18,5 @@
     "passport": "^0.7.0",
     "passport-discord": "^0.1.4"
   },
-  "engines": { "node": ">=20" }
+  "engines": { "node": "20.x" }
 }
