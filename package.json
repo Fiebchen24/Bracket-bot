@@ -1,17 +1,22 @@
 {
-  "name": "mask-bracket-bot",
+  "name": "bracket-bot-pro",
   "version": "1.0.0",
-  "description": "Multi-server Discord bracket bot for esports tournaments.",
-  "main": "index.js",
+  "description": "Multi-server Discord Bracket Bot with Dashboard/Admin Panel",
+  "main": "src/index.js",
   "scripts": {
-    "start": "node index.js",
-    "deploy": "node deploy-commands.js"
+    "start": "node src/index.js",
+    "deploy": "node src/deploy-commands.js",
+    "dev": "node src/index.js"
   },
   "dependencies": {
-    "discord.js": "^14.19.3",
-    "dotenv": "^16.5.0"
+    "better-sqlite3": "^11.7.0",
+    "discord.js": "^14.17.3",
+    "dotenv": "^16.4.7",
+    "ejs": "^3.1.10",
+    "express": "^4.21.2",
+    "express-session": "^1.18.1",
+    "passport": "^0.7.0",
+    "passport-discord": "^0.1.4"
   },
-  "engines": {
-    "node": ">=18.0.0"
-  }
+  "engines": { "node": ">=20" }
 }
