@@ -28,6 +28,14 @@ CREATE TABLE IF NOT EXISTS tournaments (
   status TEXT NOT NULL DEFAULT 'registration',
   current_round INTEGER NOT NULL DEFAULT 1,
   created_by TEXT,
+  bracket_channel_id TEXT,
+  signup_channel_id TEXT,
+  checkin_channel_id TEXT,
+  match_category_id TEXT,
+  staff_role_id TEXT,
+  auto_match_channels INTEGER DEFAULT 0,
+  auto_voice INTEGER DEFAULT 0,
+  auto_archive INTEGER DEFAULT 0,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
@@ -37,7 +45,7 @@ CREATE TABLE IF NOT EXISTS teams (
   tournament_id INTEGER NOT NULL,
   name TEXT NOT NULL,
   players_json TEXT NOT NULL,
-  checked_in INTEGER DEFAULT 1,
+  checked_in INTEGER DEFAULT 0,
   active INTEGER DEFAULT 1,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(tournament_id, name)
@@ -53,6 +61,8 @@ CREATE TABLE IF NOT EXISTS matches (
   winner_team_id INTEGER,
   reported_winner_id INTEGER,
   status TEXT NOT NULL DEFAULT 'pending',
+  text_channel_id TEXT,
+  voice_channel_id TEXT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
@@ -67,9 +77,20 @@ CREATE TABLE IF NOT EXISTS logs (
 );
 `);
 
-function rowToTournament(row) { return row || null; }
+function ensureColumn(table, column, definition) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+  if (!cols.includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+
+for (const [col, def] of [
+  ['bracket_channel_id', 'TEXT'], ['signup_channel_id', 'TEXT'], ['checkin_channel_id', 'TEXT'],
+  ['match_category_id', 'TEXT'], ['staff_role_id', 'TEXT'], ['auto_match_channels', 'INTEGER DEFAULT 0'],
+  ['auto_voice', 'INTEGER DEFAULT 0'], ['auto_archive', 'INTEGER DEFAULT 0']
+]) ensureColumn('tournaments', col, def);
+for (const [col, def] of [['text_channel_id', 'TEXT'], ['voice_channel_id', 'TEXT']]) ensureColumn('matches', col, def);
+
 function log(guildId, tournamentId, action, details='') {
   db.prepare('INSERT INTO logs (guild_id,tournament_id,action,details) VALUES (?,?,?,?)').run(guildId, tournamentId, action, details);
 }
 
-module.exports = { db, rowToTournament, log };
+module.exports = { db, log };

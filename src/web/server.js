@@ -42,37 +42,36 @@ app.get('/dashboard', requireAuth, (req, res) => {
 
 app.get('/guild/:guildId', requireAuth, (req, res) => {
   const guildId = req.params.guildId;
-  const tournament = repo.getActiveTournament(guildId);
+  const tournaments = repo.getActiveTournaments(guildId);
+  const latest = repo.getLatestTournament(guildId);
+  const selectedId = Number(req.query.tournament_id || tournaments[0]?.id || latest?.id || 0);
+  const tournament = selectedId ? repo.getTournamentById(selectedId) : null;
   const settings = repo.getSettings(guildId);
-  res.render('guild', { guildId, settings, tournament, bracketText: tournament ? engine.renderBracket(tournament) : null });
+  const bracketText = tournament && tournament.guild_id === guildId ? engine.renderBracket(tournament) : null;
+  res.render('guild', { guildId, settings, tournaments, tournament, bracketText });
 });
 
-app.post('/guild/:guildId/create', requireAuth, (req, res) => {
-  const { name, team_size, format } = req.body;
-  const active = repo.getActiveTournament(req.params.guildId);
-  if (!active) repo.createTournament(req.params.guildId, name, Number(team_size), format, req.user.id);
+app.post('/guild/:guildId/reset', requireAuth, (req, res) => {
+  const id = req.body.tournament_id ? Number(req.body.tournament_id) : null;
+  repo.resetTournament(req.params.guildId, id);
   res.redirect(`/guild/${req.params.guildId}`);
 });
-
-app.post('/guild/:guildId/reset', requireAuth, (req, res) => { repo.resetTournament(req.params.guildId); res.redirect(`/guild/${req.params.guildId}`); });
 
 app.post('/guild/:guildId/start', requireAuth, (req, res) => {
-  const t = repo.getActiveTournament(req.params.guildId);
-  if (t && t.status === 'registration') engine.seedSingleElim({...t, format: 'single'});
-  res.redirect(`/guild/${req.params.guildId}`);
+  const t = repo.getTournamentById(Number(req.body.tournament_id));
+  if (t && t.guild_id === req.params.guildId && t.status === 'registration') engine.seedSingleElim({...t, format: 'single'});
+  res.redirect(`/guild/${req.params.guildId}?tournament_id=${t?.id || ''}`);
 });
 
 app.post('/guild/:guildId/approve', requireAuth, (req, res) => {
-  const t = repo.getActiveTournament(req.params.guildId);
   const match = repo.getMatch(Number(req.body.match_id));
-  if (t && match && match.tournament_id === t.id && match.reported_winner_id) {
+  const t = match ? repo.getTournamentById(match.tournament_id) : null;
+  if (t && t.guild_id === req.params.guildId && match.reported_winner_id) {
     repo.updateMatch(match.id, { winner_team_id: match.reported_winner_id, status: 'approved' });
     engine.createNextRoundIfReady(t);
   }
-  res.redirect(`/guild/${req.params.guildId}`);
+  res.redirect(`/guild/${req.params.guildId}?tournament_id=${t?.id || ''}`);
 });
 
-function startWeb() {
-  app.listen(config.port, () => console.log(`Dashboard running on port ${config.port}`));
-}
+function startWeb() { app.listen(config.port, () => console.log(`Dashboard running on port ${config.port}`)); }
 module.exports = { app, startWeb };
