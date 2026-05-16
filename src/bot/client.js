@@ -82,12 +82,38 @@ client.on('interactionCreate', async interaction => {
       const t = repo.getActiveTournament(interaction.guildId);
       if (!t) return interaction.reply({ content: '❌ No active tournament.', ephemeral: true });
       const matchId = interaction.options.getInteger('match_id');
-      const winnerName = interaction.options.getString('winner_team_name').toLowerCase();
+      const winnerInputRaw = interaction.options.getString('winner_team_name');
+      const winnerInput = winnerInputRaw.trim();
+      const winnerInputLower = winnerInput.toLowerCase();
       const match = repo.getMatch(matchId);
       if (!match || match.tournament_id !== t.id) return interaction.reply({ content: '❌ Match not found.', ephemeral: true });
+      if (match.status === 'approved' || match.status === 'bye') return interaction.reply({ content: '❌ This match is already finished.', ephemeral: true });
+
       const teams = repo.getTeams(t.id);
-      const winner = teams.find(tm => tm.name.toLowerCase() === winnerName);
-      if (!winner || ![match.team1_id, match.team2_id].includes(winner.id)) return interaction.reply({ content: '❌ Winner team is not in this match.', ephemeral: true });
+      const matchTeamIds = [match.team1_id, match.team2_id].filter(Boolean);
+      const matchTeams = teams.filter(tm => matchTeamIds.includes(tm.id));
+
+      // Accept exact team name OR a player mention/ID from the winning team.
+      const mentionedUserId = winnerInput.match(/^<@!?(\d+)>$/)?.[1] || winnerInput.match(/^\d{15,25}$/)?.[0] || null;
+      let winner = matchTeams.find(tm => tm.name.toLowerCase() === winnerInputLower);
+
+      if (!winner && mentionedUserId) {
+        winner = matchTeams.find(tm => Array.isArray(tm.players) && tm.players.includes(mentionedUserId));
+      }
+
+      // Friendly fallback: allow clear partial team names.
+      if (!winner && winnerInputLower.length >= 2) {
+        const partialMatches = matchTeams.filter(tm => tm.name.toLowerCase().includes(winnerInputLower));
+        if (partialMatches.length === 1) winner = partialMatches[0];
+      }
+
+      if (!winner) {
+        return interaction.reply({
+          content: `❌ Winner not found in match #${matchId}. Use the exact team name or mention one player from the winning team.\nMatch teams: ${matchTeams.map(tm => `**${tm.name}** (${tm.players.map(p => `<@${p}>`).join(' ')})`).join(' vs ')}`,
+          ephemeral: true
+        });
+      }
+
       repo.updateMatch(matchId, { reported_winner_id: winner.id, status: 'reported' });
       return interaction.reply(`⏳ Reported winner for match #${matchId}: **${winner.name}**. Staff must approve with /approvewin.`);
     }

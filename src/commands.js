@@ -22,7 +22,7 @@ module.exports = [
   new SlashCommandBuilder().setName('bracket').setDescription('Show current bracket'),
   new SlashCommandBuilder().setName('reportwin').setDescription('Report winner for a match')
     .addIntegerOption(o => o.setName('match_id').setDescription('Match ID from /bracket').setRequired(true))
-    .addStringOption(o => o.setName('winner_team_name').setDescription('Winner team name').setRequired(true)),
+    .addStringOption(o => o.setName('winner_team_name').setDescription('Winner team name OR mention one winning player').setRequired(true)),
   new SlashCommandBuilder().setName('approvewin').setDescription('Approve a reported winner')
     .addIntegerOption(o => o.setName('match_id').setDescription('Match ID').setRequired(true))
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
