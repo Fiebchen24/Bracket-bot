@@ -1,6 +1,6 @@
 {
   "name": "bracket-bot-pro",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Multi-server Discord Bracket Bot with Dashboard/Admin Panel",
   "main": "src/index.js",
   "scripts": {
@@ -18,5 +18,7 @@
     "passport": "^0.7.0",
     "passport-discord": "^0.1.4"
   },
-  "engines": { "node": "20.x" }
+  "engines": {
+    "node": "20.x"
+  }
 }

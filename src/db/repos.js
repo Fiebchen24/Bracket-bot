@@ -11,6 +11,12 @@ function upsertSettings(guildId, data) {
 function getActiveTournament(guildId) {
   return db.prepare(`SELECT * FROM tournaments WHERE guild_id=? AND status IN ('registration','running','paused') ORDER BY id DESC LIMIT 1`).get(guildId);
 }
+function getLatestTournament(guildId) {
+  return db.prepare(`SELECT * FROM tournaments WHERE guild_id=? ORDER BY id DESC LIMIT 1`).get(guildId);
+}
+function getTournamentById(id) {
+  return db.prepare('SELECT * FROM tournaments WHERE id=?').get(id);
+}
 function createTournament(guildId, name, teamSize, format, createdBy) {
   const info = db.prepare('INSERT INTO tournaments (guild_id,name,team_size,format,created_by) VALUES (?,?,?,?,?)').run(guildId, name, teamSize, format, createdBy);
   log(guildId, info.lastInsertRowid, 'TOURNAMENT_CREATED', `${name} ${teamSize}v${teamSize} ${format}`);
@@ -55,4 +61,4 @@ function updateMatch(id, fields) {
 }
 function getRoundMatches(tournamentId, round) { return db.prepare('SELECT * FROM matches WHERE tournament_id=? AND round=? ORDER BY match_number ASC').all(tournamentId, round); }
 
-module.exports = { getSettings, upsertSettings, getActiveTournament, createTournament, updateTournament, resetTournament, addTeam, getTeams, getTeam, createMatch, getMatches, getMatch, updateMatch, getRoundMatches, log };
+module.exports = { getSettings, upsertSettings, getActiveTournament, getLatestTournament, getTournamentById, createTournament, updateTournament, resetTournament, addTeam, getTeams, getTeam, createMatch, getMatches, getMatch, updateMatch, getRoundMatches, log };

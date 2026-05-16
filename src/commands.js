@@ -26,6 +26,11 @@ module.exports = [
   new SlashCommandBuilder().setName('approvewin').setDescription('Approve a reported winner')
     .addIntegerOption(o => o.setName('match_id').setDescription('Match ID').setRequired(true))
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+  new SlashCommandBuilder().setName('forcematchwin').setDescription('Staff: set/approve a winner instantly')
+    .addIntegerOption(o => o.setName('match_id').setDescription('Match ID').setRequired(true))
+    .addStringOption(o => o.setName('winner_team_name').setDescription('Winner team name OR mention one winning player').setRequired(true))
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+  new SlashCommandBuilder().setName('teamlist').setDescription('Show registered teams'),
   new SlashCommandBuilder().setName('dqteam').setDescription('DQ a team and award opponent if possible')
     .addIntegerOption(o => o.setName('match_id').setDescription('Match ID').setRequired(true))
     .addStringOption(o => o.setName('team_name').setDescription('Team to DQ').setRequired(true))
