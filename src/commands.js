@@ -18,6 +18,7 @@ module.exports = [
     .addRoleOption(o => o.setName('staff_role').setDescription('Staff role for this tournament').setRequired(true))
     .addChannelOption(o => o.setName('match_category').setDescription('Category where match channels are created').setRequired(false).addChannelTypes(ChannelType.GuildCategory))
     .addChannelOption(o => o.setName('checkin_channel').setDescription('Optional check-in channel').setRequired(false).addChannelTypes(ChannelType.GuildText))
+    .addBooleanOption(o => o.setName('require_checkin').setDescription('Require teams to check in before starting?').setRequired(false))
     .addBooleanOption(o => o.setName('auto_match_channels').setDescription('Create text channels for matches?').setRequired(false))
     .addBooleanOption(o => o.setName('auto_voice').setDescription('Create voice channels for matches?').setRequired(false))
     .addBooleanOption(o => o.setName('auto_archive').setDescription('Archive match channels after approval?').setRequired(false))
@@ -56,6 +57,11 @@ module.exports = [
     .addIntegerOption(o => o.setName('tournament_id').setDescription('Optional tournament ID').setRequired(false)),
 
   new SlashCommandBuilder().setName('tournaments').setDescription('List active tournaments on this server'),
+
+  new SlashCommandBuilder().setName('togglecheckin').setDescription('Staff: turn check-in requirement on or off')
+    .addBooleanOption(o => o.setName('required').setDescription('Require check-in?').setRequired(true))
+    .addIntegerOption(o => o.setName('tournament_id').setDescription('Optional tournament ID').setRequired(false))
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
   new SlashCommandBuilder().setName('dqteam').setDescription('DQ a team and award opponent if possible')
     .addIntegerOption(o => o.setName('match_id').setDescription('Match ID').setRequired(true))

@@ -37,8 +37,8 @@ function getTournamentForBracketChannel(guildId, channelId) {
 }
 function createTournament(data) {
   const info = db.prepare(`INSERT INTO tournaments (
-    guild_id,name,team_size,format,created_by,bracket_channel_id,signup_channel_id,checkin_channel_id,match_category_id,staff_role_id,auto_match_channels,auto_voice,auto_archive
-  ) VALUES (@guildId,@name,@teamSize,@format,@createdBy,@bracketChannelId,@signupChannelId,@checkinChannelId,@matchCategoryId,@staffRoleId,@autoMatchChannels,@autoVoice,@autoArchive)`).run(data);
+    guild_id,name,team_size,format,created_by,bracket_channel_id,signup_channel_id,checkin_channel_id,match_category_id,staff_role_id,auto_match_channels,auto_voice,auto_archive,require_checkin
+  ) VALUES (@guildId,@name,@teamSize,@format,@createdBy,@bracketChannelId,@signupChannelId,@checkinChannelId,@matchCategoryId,@staffRoleId,@autoMatchChannels,@autoVoice,@autoArchive,@requireCheckin)`).run(data);
   log(data.guildId, info.lastInsertRowid, 'TOURNAMENT_CREATED', `${data.name} ${data.teamSize}v${data.teamSize} ${data.format}`);
   return getTournamentById(info.lastInsertRowid);
 }

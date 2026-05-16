@@ -189,16 +189,18 @@ client.on('interactionCreate', async interaction => {
       const staff = interaction.options.getRole('staff_role');
       const matchCategory = interaction.options.getChannel('match_category');
       const checkin = interaction.options.getChannel('checkin_channel');
+      const requireCheckin = interaction.options.getBoolean('require_checkin') === true;
       const t = repo.createTournament({
         guildId: interaction.guildId, name, teamSize, format, createdBy: interaction.user.id,
         bracketChannelId: bracket.id, signupChannelId: signup.id, checkinChannelId: checkin?.id || null,
         matchCategoryId: matchCategory?.id || null, staffRoleId: staff.id,
         autoMatchChannels: asBool(interaction.options.getBoolean('auto_match_channels')),
         autoVoice: asBool(interaction.options.getBoolean('auto_voice')),
-        autoArchive: asBool(interaction.options.getBoolean('auto_archive'))
+        autoArchive: asBool(interaction.options.getBoolean('auto_archive')),
+        requireCheckin: asBool(requireCheckin)
       });
       const note = format === 'double' ? '\n⚠️ Double Elimination is selectable and stored. Current playable engine uses Single Elimination fallback while losers bracket is completed.' : '';
-      await interaction.reply(`✅ Created **${name}** (#${t.id}) as **${teamSize}v${teamSize}** (${format}).\nSignup: ${signup}\nBracket: ${bracket}\nStaff: ${staff}${note}`);
+      await interaction.reply(`✅ Created **${name}** (#${t.id}) as **${teamSize}v${teamSize}** (${format}).\nSignup: ${signup}\nBracket: ${bracket}\nCheck-in required: **${requireCheckin ? 'Yes' : 'No'}**${requireCheckin && checkin ? ` in ${checkin}` : ''}\nStaff: ${staff}${note}`);
       return sendToChannel(interaction.guild, bracket.id, { content: `🏆 **${name}** created.\nTournament ID: **${t.id}**\nRegister in ${signup} with \`/register\`.` });
     }
 
@@ -218,7 +220,7 @@ client.on('interactionCreate', async interaction => {
       if (existing.some(tm => tm.name.toLowerCase() === name.toLowerCase())) return interaction.reply(hidden('❌ This team name is already registered.'));
       const already = existing.find(tm => tm.players.some(p => players.includes(p)));
       if (already) return interaction.reply(hidden(`❌ One of these players is already registered in **${already.name}**.`));
-      const team = repo.addTeam(t.id, name, players, !t.checkin_channel_id);
+      const team = repo.addTeam(t.id, name, players, !t.require_checkin);
       await interaction.reply(`✅ Registered **${team.name}** for **${t.name}**: ${players.map(p => `<@${p}>`).join(' ')}`);
       return postBracket(interaction, t, `✅ New registration: **${team.name}**`);
     }
@@ -226,6 +228,7 @@ client.on('interactionCreate', async interaction => {
     if (cmd === 'checkin') {
       const t = repo.getTournamentForCheckinChannel(interaction.guildId, interaction.channelId);
       if (!t) return interaction.reply(hidden('❌ No check-in tournament found in this channel.'));
+      if (!t.require_checkin) return interaction.reply(hidden('ℹ️ Check-in is disabled for this tournament. You can start with registered teams.'));
       const name = interaction.options.getString('team_name').trim().toLowerCase();
       const team = repo.getTeams(t.id).find(tm => tm.name.toLowerCase() === name && tm.players.includes(interaction.user.id));
       if (!team) return interaction.reply(hidden('❌ Team not found, or you are not in that team.'));
@@ -238,7 +241,7 @@ client.on('interactionCreate', async interaction => {
       if (!t) return interaction.reply(hidden('❌ No tournament found. Use tournament_id if multiple events exist.'));
       assertStaff(interaction, t);
       if (t.status !== 'registration') return interaction.reply(hidden('❌ Bracket already started or not in registration.'));
-      if (t.checkin_channel_id) {
+      if (t.require_checkin) {
         const notChecked = repo.getTeams(t.id).filter(tm => !tm.checked_in);
         if (notChecked.length) return interaction.reply(hidden(`❌ Some teams are not checked in: ${notChecked.map(x => x.name).join(', ')}`));
       }
@@ -304,13 +307,29 @@ client.on('interactionCreate', async interaction => {
       if (!t) return interaction.reply(hidden('❌ No tournament found.'));
       const teams = repo.getTeams(t.id);
       if (!teams.length) return interaction.reply(hidden('No teams registered yet.'));
-      return interaction.reply(`**${t.name}** (#${t.id}) teams:\n` + teams.map((tm, i) => `${i + 1}. **${tm.name}** ${tm.checked_in ? '✅' : t.checkin_channel_id ? '⏳' : ''} — ${tm.players.map(p => `<@${p}>`).join(' ')}`).join('\n').slice(0, 3800));
+      return interaction.reply(`**${t.name}** (#${t.id}) teams:\n` + teams.map((tm, i) => `${i + 1}. **${tm.name}** ${tm.checked_in ? '✅' : t.require_checkin ? '⏳' : '➖'} — ${tm.players.map(p => `<@${p}>`).join(' ')}`).join('\n').slice(0, 3800));
     }
 
     if (cmd === 'tournaments') {
       const tournaments = repo.getActiveTournaments(interaction.guildId);
       if (!tournaments.length) return interaction.reply(hidden('No active tournaments.'));
-      return interaction.reply(tournaments.map(t => `#${t.id} **${t.name}** — ${t.status} — signup <#${t.signup_channel_id}> — bracket <#${t.bracket_channel_id}>`).join('\n').slice(0, 3900));
+      return interaction.reply(tournaments.map(t => `#${t.id} **${t.name}** — ${t.status} — signup <#${t.signup_channel_id}> — bracket <#${t.bracket_channel_id}> — check-in ${t.require_checkin ? 'required' : 'off'}`).join('\n').slice(0, 3900));
+    }
+
+
+    if (cmd === 'togglecheckin') {
+      const id = interaction.options.getInteger('tournament_id');
+      const required = interaction.options.getBoolean('required');
+      const t = id ? repo.getTournamentById(id) : getTournamentFromContext(interaction, false);
+      if (!t || t.guild_id !== interaction.guildId) return interaction.reply(hidden('❌ No tournament found.'));
+      assertStaff(interaction, t);
+      repo.updateTournament(t.id, { require_checkin: required ? 1 : 0 });
+      if (!required) {
+        for (const team of repo.getTeams(t.id)) repo.updateTeam(team.id, { checked_in: 1 });
+      }
+      const fresh = repo.getTournamentById(t.id);
+      await interaction.reply(`✅ Check-in requirement for **${fresh.name}** is now **${required ? 'ON' : 'OFF'}**.`);
+      return postBracket(interaction, fresh, `ℹ️ Check-in requirement is now **${required ? 'ON' : 'OFF'}**.`);
     }
 
     if (cmd === 'dqteam') {
