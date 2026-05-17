@@ -6,5 +6,6 @@ module.exports = {
   sessionSecret: process.env.SESSION_SECRET || 'dev-secret',
   baseUrl: process.env.BASE_URL || process.env.CALLBACK_URL?.replace('/auth/discord/callback', '') || 'http://localhost:3000',
   port: Number(process.env.PORT || 3000),
-  dbPath: process.env.DB_PATH || './data/bracketbot.sqlite'
+  dbPath: process.env.DB_PATH || './data/bracketbot.sqlite',
+  databaseUrl: process.env.DATABASE_URL
 };

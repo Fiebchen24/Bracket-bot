@@ -19,29 +19,30 @@ function asBool(v) { return v ? 1 : 0; }
 function displayNameFromUser(user) { return user.globalName || user.username || user.displayName || `Player-${user.id}`; }
 function safeChannelPart(s) { return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 25) || 'team'; }
 
-function isStaff(interaction, tournament = null) {
-  const roleId = tournament?.staff_role_id || repo.getSettings(interaction.guildId)?.staff_role_id;
+async function isStaff(interaction, tournament = null) {
+  const settings = await repo.getSettings(interaction.guildId);
+  const roleId = tournament?.staff_role_id || settings?.staff_role_id;
   if (!roleId) return interaction.memberPermissions?.has('ManageGuild');
   return interaction.member.roles.cache.has(roleId) || interaction.memberPermissions?.has('ManageGuild');
 }
-function assertStaff(interaction, tournament = null) { if (!isStaff(interaction, tournament)) throw new Error('Staff only.'); }
+async function assertStaff(interaction, tournament = null) { if (!(await isStaff(interaction, tournament))) throw new Error('Staff only.'); }
 
-function getTournamentFromContext(interaction, statusAware = true) {
+async function getTournamentFromContext(interaction, statusAware = true) {
   const id = interaction.options?.getInteger?.('tournament_id');
   if (id) {
-    const t = repo.getTournamentById(id);
+    const t = await repo.getTournamentById(id);
     if (!t || t.guild_id !== interaction.guildId) return null;
     return t;
   }
-  return repo.getTournamentForChannel(interaction.guildId, interaction.channelId) || repo.getActiveTournament(interaction.guildId) || (!statusAware ? repo.getLatestTournament(interaction.guildId) : null);
+  return await repo.getTournamentForChannel(interaction.guildId, interaction.channelId) || await repo.getActiveTournament(interaction.guildId) || (!statusAware ? await repo.getLatestTournament(interaction.guildId) : null);
 }
-function teamNameFactory(tournament) {
-  const teams = repo.getTeams(tournament.id);
+async function teamNameFactory(tournament) {
+  const teams = await repo.getTeams(tournament.id);
   return id => id ? (teams.find(t => t.id === id)?.name || `Team ${id}`) : 'BYE';
 }
-function buildMatchButtons(tournament) {
-  const teamName = teamNameFactory(tournament);
-  const matches = repo.getMatches(tournament.id).filter(m => m.status === 'pending' || m.status === 'reported').slice(0, 5);
+async function buildMatchButtons(tournament) {
+  const teamName = await teamNameFactory(tournament);
+  const matches = (await repo.getMatches(tournament.id)).filter(m => m.status === 'pending' || m.status === 'reported').slice(0, 5);
   const rows = [];
   for (const m of matches) {
     const row = new ActionRowBuilder();
@@ -61,9 +62,9 @@ async function sendToChannel(guild, channelId, payload) {
   return ch.send(payload).catch(() => null);
 }
 async function postBracket(interaction, tournament, note = null) {
-  const fresh = repo.getTournamentById(tournament.id) || tournament;
-  const text = `${note ? `${note}\n\n` : ''}${engine.renderBracket(fresh)}`;
-  const components = buildMatchButtons(fresh);
+  const fresh = await repo.getTournamentById(tournament.id) || tournament;
+  const text = `${note ? `${note}\n\n` : ''}${await engine.renderBracket(fresh)}`;
+  const components = await buildMatchButtons(fresh);
   return sendToChannel(interaction.guild, fresh.bracket_channel_id, { content: text, components });
 }
 async function assignRegistrationRole(interaction, tournament, players) {
@@ -78,7 +79,7 @@ async function assignRegistrationRole(interaction, tournament, players) {
 }
 async function cleanupRegistrationRoles(interaction, tournament) {
   if (!tournament.registration_role_id || !tournament.cleanup_roles) return;
-  const players = [...new Set(repo.getTeams(tournament.id).flatMap(t => t.players))];
+  const players = [...new Set((await repo.getTeams(tournament.id)).flatMap(t => t.players))];
   for (const playerId of players) {
     const member = await interaction.guild.members.fetch(playerId).catch(() => null);
     if (member) await member.roles.remove(tournament.registration_role_id).catch(() => null);
@@ -86,8 +87,8 @@ async function cleanupRegistrationRoles(interaction, tournament) {
 }
 async function maybeCreateMatchChannels(interaction, tournament) {
   if (!tournament.auto_match_channels || !tournament.match_category_id) return;
-  const matches = repo.getMatches(tournament.id).filter(m => !m.text_channel_id && m.status === 'pending');
-  const teams = repo.getTeams(tournament.id);
+  const matches = (await repo.getMatches(tournament.id)).filter(m => !m.text_channel_id && m.status === 'pending');
+  const teams = await repo.getTeams(tournament.id);
   const teamName = id => teams.find(t => t.id === id)?.name || `team-${id}`;
   const staffRoleId = tournament.staff_role_id;
   const category = await interaction.guild.channels.fetch(tournament.match_category_id).catch(() => null);
@@ -107,8 +108,8 @@ async function maybeCreateMatchChannels(interaction, tournament) {
       voiceId = voice?.id || null;
     }
     if (textChannel) {
-      repo.updateMatch(m.id, { text_channel_id: textChannel.id, voice_channel_id: voiceId });
-      await textChannel.send({ content: `**Match #${m.id}** (${m.bracket_group || 'winners'} bracket)\n**${teamName(m.team1_id)}** vs **${teamName(m.team2_id)}**\nReport the winner here with the buttons or use \`/reportwin match_id:${m.id}\`.`, components: buildMatchButtons(tournament).slice(0,1) });
+      await repo.updateMatch(m.id, { text_channel_id: textChannel.id, voice_channel_id: voiceId });
+      await textChannel.send({ content: `**Match #${m.id}** (${m.bracket_group || 'winners'} bracket)\n**${teamName(m.team1_id)}** vs **${teamName(m.team2_id)}**\nReport the winner here with the buttons or use \`/reportwin match_id:${m.id}\`.`, components: (await buildMatchButtons(tournament)).slice(0,1) });
     }
   }
 }
@@ -123,9 +124,9 @@ function normalizeWinnerInput(input) {
   const raw = String(input || '').trim();
   return { raw, lower: raw.toLowerCase(), userId: raw.match(/^<@!?(\d+)>$/)?.[1] || raw.match(/^\d{15,25}$/)?.[0] || null };
 }
-function findWinnerInMatch(tournamentId, match, input) {
+async function findWinnerInMatch(tournamentId, match, input) {
   const { lower, userId } = normalizeWinnerInput(input);
-  const teams = repo.getTeams(tournamentId);
+  const teams = await repo.getTeams(tournamentId);
   const matchTeams = teams.filter(tm => [match.team1_id, match.team2_id].filter(Boolean).includes(tm.id));
   let winner = matchTeams.find(tm => tm.name.toLowerCase() === lower);
   if (!winner && userId) winner = matchTeams.find(tm => tm.players.includes(userId));
@@ -135,9 +136,9 @@ function findWinnerInMatch(tournamentId, match, input) {
   }
   return { winner, matchTeams };
 }
-function findTeamInTournament(tournamentId, input) {
+async function findTeamInTournament(tournamentId, input) {
   const { lower, userId } = normalizeWinnerInput(input);
-  const teams = repo.getTeams(tournamentId);
+  const teams = await repo.getTeams(tournamentId);
   let team = teams.find(tm => tm.name.toLowerCase() === lower);
   if (!team && userId) team = teams.find(tm => tm.players.includes(userId));
   if (!team && lower.length >= 2) {
@@ -147,13 +148,13 @@ function findTeamInTournament(tournamentId, input) {
   return team;
 }
 async function approveMatch(interaction, tournament, matchId) {
-  const match = repo.getMatch(matchId);
+  const match = await repo.getMatch(matchId);
   if (!tournament || !match || match.tournament_id !== tournament.id) throw new Error('Match not found.');
   if (!match.reported_winner_id) throw new Error('No winner reported for this match.');
-  repo.updateMatch(matchId, { winner_team_id: match.reported_winner_id, status: 'approved' });
+  await repo.updateMatch(matchId, { winner_team_id: match.reported_winner_id, status: 'approved' });
   await archiveMatchChannel(interaction, tournament, match);
-  engine.createNextRoundIfReady(repo.getTournamentById(tournament.id));
-  const latest = repo.getTournamentById(tournament.id);
+  await engine.createNextRoundIfReady(await repo.getTournamentById(tournament.id));
+  const latest = await repo.getTournamentById(tournament.id);
   await maybeCreateMatchChannels(interaction, latest);
   await postBracket(interaction, latest, `✅ Match #${matchId} approved.`);
   return latest;
@@ -183,21 +184,21 @@ client.on('interactionCreate', async interaction => {
     if (interaction.isButton()) {
       const [action, matchIdRaw, teamIdRaw] = interaction.customId.split(':');
       const matchId = Number(matchIdRaw);
-      const match = repo.getMatch(matchId);
+      const match = await repo.getMatch(matchId);
       if (!match) return interaction.reply(hidden('❌ Match not found.'));
-      const t = repo.getTournamentById(match.tournament_id);
+      const t = await repo.getTournamentById(match.tournament_id);
       if (!t || t.guild_id !== interaction.guildId) return interaction.reply(hidden('❌ Tournament not found.'));
       if (action === 'report') {
         if (match.status !== 'pending') return interaction.reply(hidden('❌ This match is not pending.'));
         const teamId = Number(teamIdRaw);
         if (![match.team1_id, match.team2_id].includes(teamId)) return interaction.reply(hidden('❌ Team is not in this match.'));
-        repo.updateMatch(matchId, { reported_winner_id: teamId, status: 'reported' });
-        const team = repo.getTeam(teamId);
+        await repo.updateMatch(matchId, { reported_winner_id: teamId, status: 'reported' });
+        const team = await repo.getTeam(teamId);
         await interaction.reply(`⏳ Reported winner for match #${matchId}: **${team?.name || teamId}**. Staff must approve.`);
-        return postBracket(interaction, repo.getTournamentById(t.id), `⏳ Winner reported for match #${matchId}.`);
+        return postBracket(interaction, await repo.getTournamentById(t.id), `⏳ Winner reported for match #${matchId}.`);
       }
       if (action === 'approve') {
-        if (!isStaff(interaction, t)) return interaction.reply(hidden('❌ Staff only.'));
+        if (!(await isStaff(interaction, t))) return interaction.reply(hidden('❌ Staff only.'));
         await interaction.deferReply();
         await approveMatch(interaction, t, matchId);
         return interaction.editReply(`✅ Approved match #${matchId}.`);
@@ -212,7 +213,7 @@ client.on('interactionCreate', async interaction => {
       const bracketChannel = interaction.options.getChannel('bracket_channel');
       const staffRole = interaction.options.getRole('staff_role');
       const category = interaction.options.getChannel('match_category');
-      repo.upsertSettings(interaction.guildId, { bracketChannelId: bracketChannel?.id || null, staffRoleId: staffRole.id, matchCategoryId: category?.id || null });
+      await repo.upsertSettings(interaction.guildId, { bracketChannelId: bracketChannel?.id || null, staffRoleId: staffRole.id, matchCategoryId: category?.id || null });
       return interaction.reply(hidden(`✅ Defaults saved. Staff role: ${staffRole}${bracketChannel ? ` | Default bracket: ${bracketChannel}` : ''}`));
     }
 
@@ -227,7 +228,7 @@ client.on('interactionCreate', async interaction => {
       const matchCategory = interaction.options.getChannel('match_category');
       const checkin = interaction.options.getChannel('checkin_channel');
       const requireCheckin = interaction.options.getBoolean('require_checkin') === true;
-      const t = repo.createTournament({
+      const t = await repo.createTournament({
         guildId: interaction.guildId, name, teamSize, format, createdBy: interaction.user.id,
         bracketChannelId: bracket.id, signupChannelId: signup.id, checkinChannelId: checkin?.id || null,
         matchCategoryId: matchCategory?.id || null, staffRoleId: staff.id,
@@ -243,9 +244,9 @@ client.on('interactionCreate', async interaction => {
     }
 
     if (cmd === 'register') {
-      const t = repo.getTournamentForSignupChannel(interaction.guildId, interaction.channelId);
+      const t = await repo.getTournamentForSignupChannel(interaction.guildId, interaction.channelId);
       if (!t) {
-        const open = repo.getActiveTournaments(interaction.guildId).filter(x => x.status === 'registration');
+        const open = (await repo.getActiveTournaments(interaction.guildId)).filter(x => x.status === 'registration');
         const hint = open.length ? `\nUse the correct signup channel: ${open.map(x => `<#${x.signup_channel_id}> (#${x.id})`).join(', ')}` : '';
         return interaction.reply(hidden(`❌ No open tournament signup in this channel.${hint}`));
       }
@@ -254,14 +255,14 @@ client.on('interactionCreate', async interaction => {
       const players = users.map(u => u.id);
       if (players.length !== t.team_size) return interaction.reply(hidden(`❌ This tournament requires exactly ${t.team_size} player(s) per team.`));
       if (new Set(players).size !== players.length) return interaction.reply(hidden('❌ Same player cannot be used twice in one team.'));
-      const existing = repo.getTeams(t.id);
+      const existing = await repo.getTeams(t.id);
       const already = existing.find(tm => tm.players.some(p => players.includes(p)));
       if (already) return interaction.reply(hidden(`❌ One of these players is already registered in **${already.name}**.`));
       let baseName = displayNameFromUser(users[0]);
       let name = baseName;
       let n = 2;
       while (existing.some(tm => tm.name.toLowerCase() === name.toLowerCase())) name = `${baseName}-${n++}`;
-      const team = repo.addTeam(t.id, name, players, !t.require_checkin);
+      const team = await repo.addTeam(t.id, name, players, !t.require_checkin);
       const roleResults = await assignRegistrationRole(interaction, t, players);
       await interaction.reply(`✅ Registered **${team.name}** for **${t.name}**: ${players.map(p => `<@${p}>`).join(' ')}${t.registration_role_id ? `\nRole: <@&${t.registration_role_id}> assigned.` : ''}`);
       if (roleResults.some(r => r.includes('failed'))) await interaction.followUp(hidden(`⚠️ Role notes: ${roleResults.join(', ')}`));
@@ -269,58 +270,58 @@ client.on('interactionCreate', async interaction => {
     }
 
     if (cmd === 'checkin') {
-      const t = repo.getTournamentForCheckinChannel(interaction.guildId, interaction.channelId);
+      const t = await repo.getTournamentForCheckinChannel(interaction.guildId, interaction.channelId);
       if (!t) return interaction.reply(hidden('❌ No check-in tournament found in this channel.'));
       if (!t.require_checkin) return interaction.reply(hidden('ℹ️ Check-in is disabled for this tournament. You can start with registered teams.'));
-      const team = repo.getTeams(t.id).find(tm => tm.players.includes(interaction.user.id));
+      const team = (await repo.getTeams(t.id)).find(tm => tm.players.includes(interaction.user.id));
       if (!team) return interaction.reply(hidden('❌ You are not registered in this tournament.'));
-      repo.updateTeam(team.id, { checked_in: 1 });
+      await repo.updateTeam(team.id, { checked_in: 1 });
       return interaction.reply(`✅ **${team.name}** checked in for **${t.name}**.`);
     }
 
     if (cmd === 'startbracket') {
-      let t = getTournamentFromContext(interaction);
+      let t = await getTournamentFromContext(interaction);
       if (!t) return interaction.reply(hidden('❌ No tournament found. Use tournament_id if multiple events exist.'));
-      assertStaff(interaction, t);
+      await assertStaff(interaction, t);
       if (t.status !== 'registration') return interaction.reply(hidden('❌ Bracket already started or not in registration.'));
       if (t.require_checkin) {
-        const notChecked = repo.getTeams(t.id).filter(tm => !tm.checked_in);
+        const notChecked = (await repo.getTeams(t.id)).filter(tm => !tm.checked_in);
         if (notChecked.length) return interaction.reply(hidden(`❌ Some teams are not checked in: ${notChecked.map(x => x.name).join(', ')}`));
       }
-      engine.startBracket(t);
-      t = repo.getTournamentById(t.id);
+      await engine.startBracket(t);
+      t = await repo.getTournamentById(t.id);
       await maybeCreateMatchChannels(interaction, t);
       await interaction.reply(`✅ Bracket **${t.name}** started.`);
       return postBracket(interaction, t);
     }
 
     if (cmd === 'bracket') {
-      const t = getTournamentFromContext(interaction, false);
+      const t = await getTournamentFromContext(interaction, false);
       if (!t) return interaction.reply(hidden('❌ No tournament found.'));
-      return interaction.reply({ content: engine.renderBracket(t), components: buildMatchButtons(t) });
+      return interaction.reply({ content: await engine.renderBracket(t), components: await buildMatchButtons(t) });
     }
 
     if (cmd === 'reportwin') {
       const matchId = interaction.options.getInteger('match_id');
       const winnerInput = interaction.options.getString('winner');
-      const match = repo.getMatch(matchId);
+      const match = await repo.getMatch(matchId);
       if (!match) return interaction.reply(hidden('❌ Match not found.'));
-      const t = repo.getTournamentById(match.tournament_id);
+      const t = await repo.getTournamentById(match.tournament_id);
       if (!t || t.guild_id !== interaction.guildId) return interaction.reply(hidden('❌ Tournament not found.'));
       if (match.status === 'approved' || match.status === 'bye') return interaction.reply(hidden('❌ This match is already finished.'));
-      const { winner, matchTeams } = findWinnerInMatch(t.id, match, winnerInput);
+      const { winner, matchTeams } = await findWinnerInMatch(t.id, match, winnerInput);
       if (!winner) return interaction.reply(hidden(`❌ Winner not found in match #${matchId}. Use exact display name or mention one player.\nMatch teams: ${matchTeams.map(tm => `**${tm.name}** (${tm.players.map(p => `<@${p}>`).join(' ')})`).join(' vs ')}`));
-      repo.updateMatch(matchId, { reported_winner_id: winner.id, status: 'reported' });
+      await repo.updateMatch(matchId, { reported_winner_id: winner.id, status: 'reported' });
       await interaction.reply(`⏳ Reported winner for match #${matchId}: **${winner.name}**. Staff must approve.`);
-      return postBracket(interaction, repo.getTournamentById(t.id), `⏳ Winner reported for match #${matchId}.`);
+      return postBracket(interaction, await repo.getTournamentById(t.id), `⏳ Winner reported for match #${matchId}.`);
     }
 
     if (cmd === 'approvewin') {
       const matchId = interaction.options.getInteger('match_id');
-      const match = repo.getMatch(matchId);
-      const t = match ? repo.getTournamentById(match.tournament_id) : null;
+      const match = await repo.getMatch(matchId);
+      const t = match ? await repo.getTournamentById(match.tournament_id) : null;
       if (!t || t.guild_id !== interaction.guildId) return interaction.reply(hidden('❌ Match not found.'));
-      assertStaff(interaction, t);
+      await assertStaff(interaction, t);
       await approveMatch(interaction, t, matchId);
       return interaction.reply(`✅ Approved match #${matchId}.`);
     }
@@ -328,31 +329,31 @@ client.on('interactionCreate', async interaction => {
     if (cmd === 'forcematchwin') {
       const matchId = interaction.options.getInteger('match_id');
       const winnerInput = interaction.options.getString('winner');
-      const match = repo.getMatch(matchId);
-      const t = match ? repo.getTournamentById(match.tournament_id) : null;
+      const match = await repo.getMatch(matchId);
+      const t = match ? await repo.getTournamentById(match.tournament_id) : null;
       if (!t || t.guild_id !== interaction.guildId) return interaction.reply(hidden('❌ Match not found.'));
-      assertStaff(interaction, t);
-      const { winner, matchTeams } = findWinnerInMatch(t.id, match, winnerInput);
+      await assertStaff(interaction, t);
+      const { winner, matchTeams } = await findWinnerInMatch(t.id, match, winnerInput);
       if (!winner) return interaction.reply(hidden(`❌ Winner not found in match #${matchId}. Teams: ${matchTeams.map(tm => tm.name).join(' vs ')}`));
-      repo.updateMatch(matchId, { reported_winner_id: winner.id, winner_team_id: winner.id, status: 'approved' });
+      await repo.updateMatch(matchId, { reported_winner_id: winner.id, winner_team_id: winner.id, status: 'approved' });
       await archiveMatchChannel(interaction, t, match);
-      engine.createNextRoundIfReady(repo.getTournamentById(t.id));
-      const latest = repo.getTournamentById(t.id);
+      await engine.createNextRoundIfReady(await repo.getTournamentById(t.id));
+      const latest = await repo.getTournamentById(t.id);
       await maybeCreateMatchChannels(interaction, latest);
       await interaction.reply(`✅ Force win set for match #${matchId}: **${winner.name}**.`);
       return postBracket(interaction, latest, `✅ Force win set for match #${matchId}.`);
     }
 
     if (cmd === 'teamlist') {
-      const t = getTournamentFromContext(interaction, false);
+      const t = await getTournamentFromContext(interaction, false);
       if (!t) return interaction.reply(hidden('❌ No tournament found.'));
-      const teams = repo.getTeams(t.id);
+      const teams = await repo.getTeams(t.id);
       if (!teams.length) return interaction.reply(hidden('No teams registered yet.'));
       return interaction.reply(`**${t.name}** (#${t.id}) teams:\n` + teams.map((tm, i) => `${i + 1}. **${tm.name}** ${tm.checked_in ? '✅' : t.require_checkin ? '⏳' : '➖'} — ${tm.players.map(p => `<@${p}>`).join(' ')}`).join('\n').slice(0, 3800));
     }
 
     if (cmd === 'tournaments') {
-      const tournaments = repo.getActiveTournaments(interaction.guildId);
+      const tournaments = await repo.getActiveTournaments(interaction.guildId);
       if (!tournaments.length) return interaction.reply(hidden('No active tournaments.'));
       return interaction.reply(tournaments.map(t => `#${t.id} **${t.name}** — ${t.status} — signup <#${t.signup_channel_id}> — bracket <#${t.bracket_channel_id}> — check-in ${t.require_checkin ? 'required' : 'off'}`).join('\n').slice(0, 3900));
     }
@@ -360,12 +361,12 @@ client.on('interactionCreate', async interaction => {
     if (cmd === 'togglecheckin') {
       const id = interaction.options.getInteger('tournament_id');
       const required = interaction.options.getBoolean('required');
-      const t = id ? repo.getTournamentById(id) : getTournamentFromContext(interaction, false);
+      const t = id ? await repo.getTournamentById(id) : await getTournamentFromContext(interaction, false);
       if (!t || t.guild_id !== interaction.guildId) return interaction.reply(hidden('❌ No tournament found.'));
-      assertStaff(interaction, t);
-      repo.updateTournament(t.id, { require_checkin: required ? 1 : 0 });
-      if (!required) for (const team of repo.getTeams(t.id)) repo.updateTeam(team.id, { checked_in: 1 });
-      const fresh = repo.getTournamentById(t.id);
+      await assertStaff(interaction, t);
+      await repo.updateTournament(t.id, { require_checkin: required ? 1 : 0 });
+      if (!required) for (const team of await repo.getTeams(t.id)) await repo.updateTeam(team.id, { checked_in: 1 });
+      const fresh = await repo.getTournamentById(t.id);
       await interaction.reply(`✅ Check-in requirement for **${fresh.name}** is now **${required ? 'ON' : 'OFF'}**.`);
       return postBracket(interaction, fresh, `ℹ️ Check-in requirement is now **${required ? 'ON' : 'OFF'}**.`);
     }
@@ -373,18 +374,18 @@ client.on('interactionCreate', async interaction => {
     if (cmd === 'dqteam') {
       const matchId = interaction.options.getInteger('match_id');
       const dqInput = interaction.options.getString('team');
-      const match = repo.getMatch(matchId);
-      const t = match ? repo.getTournamentById(match.tournament_id) : null;
+      const match = await repo.getMatch(matchId);
+      const t = match ? await repo.getTournamentById(match.tournament_id) : null;
       if (!t || t.guild_id !== interaction.guildId) return interaction.reply(hidden('❌ Match not found.'));
-      assertStaff(interaction, t);
-      const dq = findTeamInTournament(t.id, dqInput);
+      await assertStaff(interaction, t);
+      const dq = await findTeamInTournament(t.id, dqInput);
       if (!dq || ![match.team1_id, match.team2_id].includes(dq.id)) return interaction.reply(hidden('❌ Team is not in this match.'));
       const winnerId = match.team1_id === dq.id ? match.team2_id : match.team1_id;
       if (!winnerId) return interaction.reply(hidden('❌ Cannot award win because no opponent exists.'));
-      repo.updateMatch(matchId, { reported_winner_id: winnerId, winner_team_id: winnerId, status: 'approved' });
+      await repo.updateMatch(matchId, { reported_winner_id: winnerId, winner_team_id: winnerId, status: 'approved' });
       await archiveMatchChannel(interaction, t, match);
-      engine.createNextRoundIfReady(repo.getTournamentById(t.id));
-      const latest = repo.getTournamentById(t.id);
+      await engine.createNextRoundIfReady(await repo.getTournamentById(t.id));
+      const latest = await repo.getTournamentById(t.id);
       await maybeCreateMatchChannels(interaction, latest);
       await interaction.reply('✅ DQ recorded. Opponent advances.');
       return postBracket(interaction, latest, `✅ DQ recorded for match #${matchId}.`);
@@ -392,11 +393,11 @@ client.on('interactionCreate', async interaction => {
 
     if (cmd === 'resetbracket') {
       const id = interaction.options.getInteger('tournament_id');
-      const t = id ? repo.getTournamentById(id) : getTournamentFromContext(interaction);
+      const t = id ? await repo.getTournamentById(id) : await getTournamentFromContext(interaction);
       if (!t || t.guild_id !== interaction.guildId) return interaction.reply(hidden('❌ No tournament found.'));
-      assertStaff(interaction, t);
+      await assertStaff(interaction, t);
       await cleanupRegistrationRoles(interaction, t);
-      repo.resetTournament(interaction.guildId, t.id);
+      await repo.resetTournament(interaction.guildId, t.id);
       return interaction.reply(hidden(`✅ Tournament **${t.name}** ended/reset.`));
     }
   } catch (err) {

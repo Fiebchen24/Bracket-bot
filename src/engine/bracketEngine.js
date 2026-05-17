@@ -1,179 +1,163 @@
 const repo = require('../db/repos');
-
 function shuffle(arr) { return [...arr].sort(() => Math.random() - 0.5); }
-function pairIds(tournamentId, teamIds, round, group) {
+function teamName(id, teams) { return id ? (teams.find(t => t.id === id)?.name || `Team ${id}`) : 'BYE'; }
+function isDone(m) { return m.status === 'approved' || m.status === 'bye'; }
+
+async function createMatchesFromTeams(tournamentId, teamIds, round = 1, group = 'winners') {
   const created = [];
   let matchNo = 1;
   for (let i = 0; i < teamIds.length; i += 2) {
-    const t1 = teamIds[i];
+    const t1 = teamIds[i] || null;
     const t2 = teamIds[i + 1] || null;
-    if (!t2) created.push(repo.createMatch(tournamentId, round, matchNo++, t1, null, 'bye', t1, group));
-    else created.push(repo.createMatch(tournamentId, round, matchNo++, t1, t2, 'pending', null, group));
+    if (!t2) created.push(await repo.createMatch(tournamentId, round, matchNo++, t1, null, 'bye', t1, group));
+    else created.push(await repo.createMatch(tournamentId, round, matchNo++, t1, t2, 'pending', null, group));
   }
   return created;
 }
-function seedSingleElim(tournament) {
-  const teams = shuffle(repo.getTeams(tournament.id));
-  if (teams.length < 2) throw new Error(`Need at least 2 teams to start. Found ${teams.length}.`);
-  pairIds(tournament.id, teams.map(t => t.id), 1, 'winners');
-  repo.updateTournament(tournament.id, { status: 'running', current_round: 1 });
-  repo.log(tournament.guild_id, tournament.id, 'BRACKET_STARTED', `${teams.length} teams single`);
-  createNextRoundIfReady(repo.getTournamentById(tournament.id));
+async function startSingle(tournament) {
+  const teams = shuffle(await repo.getTeams(tournament.id));
+  if (teams.length < 2) throw new Error('Need at least 2 teams to start.');
+  await createMatchesFromTeams(tournament.id, teams.map(t => t.id), 1, 'winners');
+  await repo.updateTournament(tournament.id, { status: 'running', current_round: 1 });
+  await repo.log(tournament.guild_id, tournament.id, 'BRACKET_STARTED', `${teams.length} teams single`);
+  await createNextRoundIfReady(await repo.getTournamentById(tournament.id));
   return repo.getMatches(tournament.id);
 }
-function seedDoubleElim(tournament) {
-  const teams = shuffle(repo.getTeams(tournament.id));
-  if (teams.length < 2) throw new Error(`Need at least 2 teams to start. Found ${teams.length}.`);
-  pairIds(tournament.id, teams.map(t => t.id), 1, 'winners');
-  repo.updateTournament(tournament.id, { status: 'running', current_round: 1 });
-  repo.log(tournament.guild_id, tournament.id, 'BRACKET_STARTED', `${teams.length} teams double`);
-  createNextRoundIfReady(repo.getTournamentById(tournament.id));
+async function startDouble(tournament) {
+  const teams = shuffle(await repo.getTeams(tournament.id));
+  if (teams.length < 2) throw new Error('Need at least 2 teams to start.');
+  await createMatchesFromTeams(tournament.id, teams.map(t => t.id), 1, 'winners');
+  await repo.updateTournament(tournament.id, { status: 'running', current_round: 1 });
+  await repo.log(tournament.guild_id, tournament.id, 'BRACKET_STARTED', `${teams.length} teams double`);
+  await createNextRoundIfReady(await repo.getTournamentById(tournament.id));
   return repo.getMatches(tournament.id);
 }
-function startBracket(tournament) {
-  return tournament.format === 'double' ? seedDoubleElim(tournament) : seedSingleElim(tournament);
+async function startBracket(tournament) {
+  return tournament.format === 'double' ? startDouble(tournament) : startSingle(tournament);
 }
-function isDone(m) { return ['approved','bye'].includes(m.status); }
-function groupRoundDone(tournamentId, group, round) {
-  const ms = repo.getGroupRoundMatches(tournamentId, group, round);
-  return ms.length > 0 && ms.every(isDone);
+async function winnersOfRound(tournamentId, group, round) {
+  const ms = await repo.getGroupRoundMatches(tournamentId, group, round);
+  if (!ms.length) return null;
+  if (!ms.every(isDone)) return null;
+  return ms.map(m => m.winner_team_id).filter(Boolean);
 }
-function matchLoser(m) {
-  if (!m.winner_team_id || !m.team1_id || !m.team2_id) return null;
-  return m.winner_team_id === m.team1_id ? m.team2_id : m.team1_id;
+function losersOfMatches(ms) {
+  return ms.map(m => (m.team1_id && m.team1_id !== m.winner_team_id ? m.team1_id : (m.team2_id && m.team2_id !== m.winner_team_id ? m.team2_id : null))).filter(Boolean);
 }
-function roundExists(tournamentId, group, round) { return repo.getGroupRoundMatches(tournamentId, group, round).length > 0; }
-function createNextRoundIfReady(tournament) {
-  if (!tournament) return false;
-  return tournament.format === 'double' ? createNextDoubleRounds(tournament) : createNextSingleRound(tournament);
-}
-function createNextSingleRound(tournament) {
-  let changed = false;
-  while (true) {
-    const rounds = [...new Set(repo.getMatches(tournament.id).filter(m => m.bracket_group === 'winners').map(m => m.round))].sort((a,b)=>a-b);
-    let progressed = false;
-    for (const round of rounds) {
-      if (!groupRoundDone(tournament.id, 'winners', round)) continue;
-      if (roundExists(tournament.id, 'winners', round + 1)) continue;
-      const winners = repo.getGroupRoundMatches(tournament.id, 'winners', round).map(m => m.winner_team_id).filter(Boolean);
-      if (winners.length <= 1) {
-        repo.updateTournament(tournament.id, { status: 'finished', winner_team_id: winners[0] || null });
-        repo.log(tournament.guild_id, tournament.id, 'TOURNAMENT_FINISHED', `Winner team id: ${winners[0] || 'none'}`);
-        return true;
-      }
-      pairIds(tournament.id, winners, round + 1, 'winners');
-      repo.updateTournament(tournament.id, { current_round: round + 1 });
-      repo.log(tournament.guild_id, tournament.id, 'NEXT_ROUND_CREATED', `Round ${round + 1}`);
-      changed = progressed = true;
-      break;
+async function roundExists(tournamentId, group, round) { return (await repo.getGroupRoundMatches(tournamentId, group, round)).length > 0; }
+
+async function createNextRoundIfReady(tournament) {
+  if (!tournament || tournament.status !== 'running') return;
+  if (tournament.format === 'single') {
+    const matches = await repo.getMatches(tournament.id);
+    const rounds = [...new Set(matches.filter(m => m.bracket_group === 'winners').map(m => m.round))].sort((a,b)=>a-b);
+    const round = rounds.at(-1) || 1;
+    if (await roundExists(tournament.id, 'winners', round + 1)) return;
+    const winners = await winnersOfRound(tournament.id, 'winners', round);
+    if (!winners) return;
+    if (winners.length <= 1) {
+      await repo.updateTournament(tournament.id, { status: 'finished', winner_team_id: winners[0] || null });
+      await repo.log(tournament.guild_id, tournament.id, 'TOURNAMENT_FINISHED', `Winner team id: ${winners[0] || 'none'}`);
+      return;
     }
-    if (!progressed) break;
+    await createMatchesFromTeams(tournament.id, winners, round + 1, 'winners');
+    await repo.updateTournament(tournament.id, { current_round: round + 1 });
+    await repo.log(tournament.guild_id, tournament.id, 'NEXT_ROUND_CREATED', `Round ${round + 1}`);
+    await createNextRoundIfReady(await repo.getTournamentById(tournament.id));
+    return;
   }
-  return changed;
-}
-function createNextDoubleRounds(tournament) {
-  let changed = false;
-  for (let guard = 0; guard < 10; guard++) {
-    let progressed = false;
-    const matches = repo.getMatches(tournament.id);
-    const groups = ['winners','losers'];
+
+  // Simple double elimination engine: creates WB, LB, Grand Final. Stable for small/medium events.
+  if (tournament.format === 'double') {
+    const matches = await repo.getMatches(tournament.id);
+    const groups = ['winners', 'losers'];
     for (const group of groups) {
-      const rounds = [...new Set(matches.filter(m => m.bracket_group === group).map(m => m.round))].sort((a,b)=>a-b);
+      const groupMatches = matches.filter(m => m.bracket_group === group);
+      const rounds = [...new Set(groupMatches.map(m => m.round))].sort((a,b)=>a-b);
       for (const round of rounds) {
-        if (!groupRoundDone(tournament.id, group, round)) continue;
-        const roundMatches = repo.getGroupRoundMatches(tournament.id, group, round);
+        const roundMatches = await repo.getGroupRoundMatches(tournament.id, group, round);
+        if (!roundMatches.length || !roundMatches.every(isDone)) continue;
         const winners = roundMatches.map(m => m.winner_team_id).filter(Boolean);
         if (group === 'winners') {
-          const losers = roundMatches.map(matchLoser).filter(Boolean);
-          if (winners.length > 1 && !roundExists(tournament.id, 'winners', round + 1)) {
-            pairIds(tournament.id, winners, round + 1, 'winners');
-            repo.log(tournament.guild_id, tournament.id, 'WB_NEXT_CREATED', `Winner bracket round ${round + 1}`);
-            changed = progressed = true;
+          if (winners.length > 1 && !(await roundExists(tournament.id, 'winners', round + 1))) {
+            await createMatchesFromTeams(tournament.id, winners, round + 1, 'winners');
+            await repo.log(tournament.guild_id, tournament.id, 'WB_NEXT_CREATED', `Winner bracket round ${round + 1}`);
           }
-          if (losers.length) {
-            const lbRound = Math.max(1, round * 2 - 1);
-            if (!roundExists(tournament.id, 'losers', lbRound)) {
-              pairIds(tournament.id, losers, lbRound, 'losers');
-              repo.log(tournament.guild_id, tournament.id, 'LB_CREATED', `Loser bracket round ${lbRound}`);
-              changed = progressed = true;
-            }
+          const losers = losersOfMatches(roundMatches);
+          if (losers.length && !(await roundExists(tournament.id, 'losers', round))) {
+            await createMatchesFromTeams(tournament.id, losers, round, 'losers');
+            await repo.log(tournament.guild_id, tournament.id, 'LB_CREATED', `Loser bracket round ${round}`);
           }
-        } else {
-          if (winners.length > 1 && !roundExists(tournament.id, 'losers', round + 1)) {
-            pairIds(tournament.id, winners, round + 1, 'losers');
-            repo.log(tournament.guild_id, tournament.id, 'LB_NEXT_CREATED', `Loser bracket round ${round + 1}`);
-            changed = progressed = true;
+        } else if (group === 'losers') {
+          if (winners.length > 1 && !(await roundExists(tournament.id, 'losers', round + 1))) {
+            await createMatchesFromTeams(tournament.id, winners, round + 1, 'losers');
+            await repo.log(tournament.guild_id, tournament.id, 'LB_NEXT_CREATED', `Loser bracket round ${round + 1}`);
           }
         }
       }
     }
-    const fresh = repo.getMatches(tournament.id);
-    const pendingWB = fresh.some(m => m.bracket_group === 'winners' && !isDone(m));
-    const pendingLB = fresh.some(m => m.bracket_group === 'losers' && !isDone(m));
-    const wbDoneMatches = fresh.filter(m => m.bracket_group === 'winners' && isDone(m));
-    const lbDoneMatches = fresh.filter(m => m.bracket_group === 'losers' && isDone(m));
-    const maxWbRound = Math.max(0, ...fresh.filter(m => m.bracket_group === 'winners').map(m => m.round));
-    const maxLbRound = Math.max(0, ...fresh.filter(m => m.bracket_group === 'losers').map(m => m.round));
-    const wbFinal = wbDoneMatches.find(m => m.round === maxWbRound && m.winner_team_id);
-    const lbFinal = lbDoneMatches.find(m => m.round === maxLbRound && m.winner_team_id);
-    if (!pendingWB && !pendingLB && wbFinal && lbFinal && !fresh.some(m => m.bracket_group === 'grand')) {
-      if (wbFinal.winner_team_id === lbFinal.winner_team_id) {
-        repo.updateTournament(tournament.id, { status: 'finished', winner_team_id: wbFinal.winner_team_id });
-        repo.log(tournament.guild_id, tournament.id, 'TOURNAMENT_FINISHED', `Winner team id: ${wbFinal.winner_team_id}`);
-      } else {
-        repo.createMatch(tournament.id, 1, 1, wbFinal.winner_team_id, lbFinal.winner_team_id, 'pending', null, 'grand');
-        repo.log(tournament.guild_id, tournament.id, 'GRAND_FINAL_CREATED', 'Grand final created');
-        changed = progressed = true;
+    const fresh = await repo.getMatches(tournament.id);
+    const wb = fresh.filter(m => m.bracket_group === 'winners');
+    const lb = fresh.filter(m => m.bracket_group === 'losers');
+    const wbDone = wb.length && wb.every(isDone);
+    const lbDone = lb.length && lb.every(isDone);
+    const grandExists = fresh.some(m => m.bracket_group === 'grand');
+    if (wbDone && lbDone && !grandExists) {
+      const wbWinner = wb.sort((a,b)=>b.round-a.round)[0]?.winner_team_id;
+      const lbWinner = lb.sort((a,b)=>b.round-a.round)[0]?.winner_team_id;
+      if (wbWinner && lbWinner && wbWinner !== lbWinner) {
+        await repo.createMatch(tournament.id, 1, 1, wbWinner, lbWinner, 'pending', null, 'grand');
+        await repo.log(tournament.guild_id, tournament.id, 'GRAND_FINAL_CREATED', 'Grand final created');
+      } else if (wbWinner) {
+        await repo.updateTournament(tournament.id, { status: 'finished', winner_team_id: wbWinner });
       }
     }
-    const grand = fresh.filter(m => m.bracket_group === 'grand');
-    if (grand.length && grand.every(isDone)) {
-      const winner = grand[grand.length - 1].winner_team_id;
-      repo.updateTournament(tournament.id, { status: 'finished', winner_team_id: winner });
-      repo.log(tournament.guild_id, tournament.id, 'TOURNAMENT_FINISHED', `Winner team id: ${winner}`);
-      return true;
+    const grand = (await repo.getMatches(tournament.id)).find(m => m.bracket_group === 'grand');
+    if (grand && isDone(grand)) {
+      await repo.updateTournament(tournament.id, { status: 'finished', winner_team_id: grand.winner_team_id });
+      await repo.log(tournament.guild_id, tournament.id, 'TOURNAMENT_FINISHED', `Winner team id: ${grand.winner_team_id}`);
     }
-    if (!progressed) break;
   }
-  return changed;
 }
-function renderBracket(tournament) {
-  const teams = repo.getTeams(tournament.id);
-  const matches = repo.getMatches(tournament.id);
-  const teamName = id => id ? (teams.find(t => t.id === id)?.name || `Team ${id}`) : 'BYE';
-  const lines = [];
-  const winner = tournament.winner_team_id ? ` | Winner: **${teamName(tournament.winner_team_id)}**` : '';
-  lines.push(`**${tournament.name}** — ${tournament.team_size}v${tournament.team_size} — ${tournament.format}${winner}`);
-  lines.push(`Status: **${tournament.status}** | Teams: **${teams.length}** | Check-in: **${tournament.require_checkin ? 'required' : 'off'}**`);
-  if (!matches.length) {
-    lines.push('\nRegistered teams:');
-    teams.forEach((t, i) => lines.push(`${i+1}. ${t.name} ${t.checked_in ? '✅' : tournament.require_checkin ? '⏳' : '➖'} — ${t.players.map(p => `<@${p}>`).join(' ')}`));
-    return lines.join('\n');
+
+async function renderBracket(tournament) {
+  const teams = await repo.getTeams(tournament.id);
+  const matches = await repo.getMatches(tournament.id);
+  if (!matches.length) return `**${tournament.name}** (#${tournament.id})\nStatus: ${tournament.status}\nNo matches yet.`;
+  const grouped = {};
+  for (const m of matches) {
+    const g = m.bracket_group || 'winners';
+    grouped[g] ||= {};
+    grouped[g][m.round] ||= [];
+    grouped[g][m.round].push(m);
   }
-  const groupTitle = { winners: 'Winner Bracket', losers: 'Loser Bracket', grand: 'Grand Final' };
+  let out = `**${tournament.name}** (#${tournament.id}) — ${tournament.format === 'double' ? 'Double Elimination' : 'Single Elimination'}\nStatus: **${tournament.status}**\n`;
   for (const group of ['winners','losers','grand']) {
-    const groupMatches = matches.filter(m => (m.bracket_group || 'winners') === group);
-    if (!groupMatches.length) continue;
-    lines.push(`\n__${groupTitle[group]}__`);
-    let currentRound = null;
-    for (const m of groupMatches) {
-      if (m.round !== currentRound) { currentRound = m.round; lines.push(`**Round ${currentRound}**`); }
-      const status = m.status === 'approved' || m.status === 'bye' ? `✅ Winner: ${teamName(m.winner_team_id)}` : m.status === 'reported' ? `⏳ Reported: ${teamName(m.reported_winner_id)}` : '🕐 Pending';
-      lines.push(`#${m.id} M${m.match_number}: ${teamName(m.team1_id)} vs ${teamName(m.team2_id)} — ${status}`);
+    if (!grouped[group]) continue;
+    out += `\n__${group === 'winners' ? 'Winner Bracket' : group === 'losers' ? 'Loser Bracket' : 'Grand Final'}__\n`;
+    for (const round of Object.keys(grouped[group]).sort((a,b)=>Number(a)-Number(b))) {
+      out += `Round ${round}:\n`;
+      for (const m of grouped[group][round].sort((a,b)=>a.match_number-b.match_number)) {
+        const winner = m.winner_team_id ? ` → Winner: **${teamName(m.winner_team_id, teams)}**` : '';
+        out += `#${m.id}: ${teamName(m.team1_id, teams)} vs ${teamName(m.team2_id, teams)} [${m.status}]${winner}\n`;
+      }
     }
   }
-  return lines.join('\n').slice(0, 3900);
+  return out.slice(0, 3900);
 }
-function bracketData(tournament) {
-  const teams = repo.getTeams(tournament.id);
-  const teamById = new Map(teams.map(t => [t.id, t]));
-  const matches = repo.getMatches(tournament.id).map(m => ({
+async function getBracketView(tournament) {
+  const teams = await repo.getTeams(tournament.id);
+  const byId = new Map(teams.map(t => [t.id, t]));
+  const matches = (await repo.getMatches(tournament.id)).map(m => ({
     ...m,
-    team1: m.team1_id ? teamById.get(m.team1_id) : null,
-    team2: m.team2_id ? teamById.get(m.team2_id) : null,
-    winner: m.winner_team_id ? teamById.get(m.winner_team_id) : null,
-    reportedWinner: m.reported_winner_id ? teamById.get(m.reported_winner_id) : null
+    team1: m.team1_id ? byId.get(m.team1_id) || null : null,
+    team2: m.team2_id ? byId.get(m.team2_id) || null : null,
+    reportedWinner: m.reported_winner_id ? byId.get(m.reported_winner_id) || null : null,
+    winner: m.winner_team_id ? byId.get(m.winner_team_id) || null : null,
+    team1_name: teamName(m.team1_id, teams),
+    team2_name: teamName(m.team2_id, teams),
+    winner_name: teamName(m.winner_team_id, teams)
   }));
-  return { teams, matches };
+  return { tournament, teams, matches };
 }
-module.exports = { seedSingleElim, seedDoubleElim, startBracket, createNextRoundIfReady, renderBracket, bracketData };
+module.exports = { startBracket, createNextRoundIfReady, renderBracket, getBracketView };

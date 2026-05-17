@@ -56,63 +56,69 @@ app.get('/dashboard', requireAuth, (req, res) => {
   res.render('dashboard', { user: req.user, guilds });
 });
 
-app.get('/guild/:guildId', requireAuth, ensureGuildAdmin, (req, res) => {
-  const guildId = req.params.guildId;
-  const tournaments = repo.getActiveTournaments(guildId);
-  const latest = repo.getLatestTournament(guildId);
-  const selectedId = Number(req.query.tournament_id || tournaments[0]?.id || latest?.id || 0);
-  const tournament = selectedId ? repo.getTournamentById(selectedId) : null;
-  const settings = repo.getSettings(guildId);
-  const validTournament = tournament && tournament.guild_id === guildId ? tournament : null;
-  const bracketText = validTournament ? engine.renderBracket(validTournament) : null;
-  const data = validTournament ? engine.bracketData(validTournament) : { teams: [], matches: [] };
-  const logs = validTournament ? repo.getLogs(validTournament.id, 25) : [];
-  res.render('guild', { guildId, settings, tournaments, tournament: validTournament, bracketText, data, logs });
+app.get('/guild/:guildId', requireAuth, ensureGuildAdmin, async (req, res, next) => {
+  try {
+    const guildId = req.params.guildId;
+    const tournaments = await repo.getActiveTournaments(guildId);
+    const latest = await repo.getLatestTournament(guildId);
+    const selectedId = Number(req.query.tournament_id || tournaments[0]?.id || latest?.id || 0);
+    const tournament = selectedId ? await repo.getTournamentById(selectedId) : null;
+    const settings = await repo.getSettings(guildId);
+    const validTournament = tournament && tournament.guild_id === guildId ? tournament : null;
+    const bracketText = validTournament ? await engine.renderBracket(validTournament) : null;
+    const data = validTournament ? await engine.getBracketView(validTournament) : { teams: [], matches: [] };
+    const logs = validTournament ? await repo.getLogs(validTournament.id, 25) : [];
+    res.render('guild', { guildId, settings, tournaments, tournament: validTournament, bracketText, data, logs });
+  } catch (err) { next(err); }
 });
 
-app.post('/guild/:guildId/reset', requireAuth, ensureGuildAdmin, (req, res) => {
-  const id = req.body.tournament_id ? Number(req.body.tournament_id) : null;
-  repo.resetTournament(req.params.guildId, id);
-  res.redirect(`/guild/${req.params.guildId}`);
+app.post('/guild/:guildId/reset', requireAuth, ensureGuildAdmin, async (req, res, next) => {
+  try { const id = req.body.tournament_id ? Number(req.body.tournament_id) : null; await repo.resetTournament(req.params.guildId, id); res.redirect(`/guild/${req.params.guildId}`); } catch (err) { next(err); }
 });
-app.post('/guild/:guildId/start', requireAuth, ensureGuildAdmin, (req, res) => {
-  const t = repo.getTournamentById(Number(req.body.tournament_id));
-  if (t && t.guild_id === req.params.guildId && t.status === 'registration') engine.startBracket(t);
-  res.redirect(`/guild/${req.params.guildId}?tournament_id=${t?.id || ''}`);
+app.post('/guild/:guildId/start', requireAuth, ensureGuildAdmin, async (req, res, next) => {
+  try { const t = await repo.getTournamentById(Number(req.body.tournament_id)); if (t && t.guild_id === req.params.guildId && t.status === 'registration') await engine.startBracket(t); res.redirect(`/guild/${req.params.guildId}?tournament_id=${t?.id || ''}`); } catch (err) { next(err); }
 });
-app.post('/guild/:guildId/approve', requireAuth, ensureGuildAdmin, (req, res) => {
-  const match = repo.getMatch(Number(req.body.match_id));
-  const t = match ? repo.getTournamentById(match.tournament_id) : null;
-  if (t && t.guild_id === req.params.guildId && match.reported_winner_id) {
-    repo.updateMatch(match.id, { winner_team_id: match.reported_winner_id, status: 'approved' });
-    engine.createNextRoundIfReady(repo.getTournamentById(t.id));
-  }
-  res.redirect(`/guild/${req.params.guildId}?tournament_id=${t?.id || ''}`);
+app.post('/guild/:guildId/approve', requireAuth, ensureGuildAdmin, async (req, res, next) => {
+  try {
+    const match = await repo.getMatch(Number(req.body.match_id));
+    const t = match ? await repo.getTournamentById(match.tournament_id) : null;
+    if (t && t.guild_id === req.params.guildId && match.reported_winner_id) {
+      await repo.updateMatch(match.id, { winner_team_id: match.reported_winner_id, status: 'approved' });
+      await engine.createNextRoundIfReady(await repo.getTournamentById(t.id));
+    }
+    res.redirect(`/guild/${req.params.guildId}?tournament_id=${t?.id || ''}`);
+  } catch (err) { next(err); }
 });
-app.post('/guild/:guildId/force', requireAuth, ensureGuildAdmin, (req, res) => {
-  const match = repo.getMatch(Number(req.body.match_id));
-  const t = match ? repo.getTournamentById(match.tournament_id) : null;
-  const winnerId = Number(req.body.winner_team_id);
-  if (t && t.guild_id === req.params.guildId && [match.team1_id, match.team2_id].includes(winnerId)) {
-    repo.updateMatch(match.id, { reported_winner_id: winnerId, winner_team_id: winnerId, status: 'approved' });
-    engine.createNextRoundIfReady(repo.getTournamentById(t.id));
-  }
-  res.redirect(`/guild/${req.params.guildId}?tournament_id=${t?.id || ''}`);
+app.post('/guild/:guildId/force', requireAuth, ensureGuildAdmin, async (req, res, next) => {
+  try {
+    const match = await repo.getMatch(Number(req.body.match_id));
+    const t = match ? await repo.getTournamentById(match.tournament_id) : null;
+    const winnerId = Number(req.body.winner_team_id);
+    if (t && t.guild_id === req.params.guildId && [match.team1_id, match.team2_id].includes(winnerId)) {
+      await repo.updateMatch(match.id, { reported_winner_id: winnerId, winner_team_id: winnerId, status: 'approved' });
+      await engine.createNextRoundIfReady(await repo.getTournamentById(t.id));
+    }
+    res.redirect(`/guild/${req.params.guildId}?tournament_id=${t?.id || ''}`);
+  } catch (err) { next(err); }
 });
-app.post('/guild/:guildId/remove-team', requireAuth, ensureGuildAdmin, (req, res) => {
-  const teamId = Number(req.body.team_id);
-  const team = repo.getTeam(teamId);
-  const tournament = team ? repo.getTournamentById(team.tournament_id) : null;
-  if (tournament && tournament.guild_id === req.params.guildId && tournament.status === 'registration') repo.updateTeam(teamId, { active: 0 });
-  res.redirect(`/guild/${req.params.guildId}?tournament_id=${tournament?.id || ''}`);
+app.post('/guild/:guildId/remove-team', requireAuth, ensureGuildAdmin, async (req, res, next) => {
+  try {
+    const teamId = Number(req.body.team_id);
+    const team = await repo.getTeam(teamId);
+    const tournament = team ? await repo.getTournamentById(team.tournament_id) : null;
+    if (tournament && tournament.guild_id === req.params.guildId && tournament.status === 'registration') await repo.updateTeam(teamId, { active: 0 });
+    res.redirect(`/guild/${req.params.guildId}?tournament_id=${tournament?.id || ''}`);
+  } catch (err) { next(err); }
 });
-app.post('/guild/:guildId/edit-team', requireAuth, ensureGuildAdmin, (req, res) => {
-  const teamId = Number(req.body.team_id);
-  const name = String(req.body.name || '').trim().slice(0, 80);
-  const team = repo.getTeam(teamId);
-  const tournament = team ? repo.getTournamentById(team.tournament_id) : null;
-  if (tournament && tournament.guild_id === req.params.guildId && name) repo.updateTeam(teamId, { name });
-  res.redirect(`/guild/${req.params.guildId}?tournament_id=${tournament?.id || ''}`);
+app.post('/guild/:guildId/edit-team', requireAuth, ensureGuildAdmin, async (req, res, next) => {
+  try {
+    const teamId = Number(req.body.team_id);
+    const name = String(req.body.name || '').trim().slice(0, 80);
+    const team = await repo.getTeam(teamId);
+    const tournament = team ? await repo.getTournamentById(team.tournament_id) : null;
+    if (tournament && tournament.guild_id === req.params.guildId && name) await repo.updateTeam(teamId, { name });
+    res.redirect(`/guild/${req.params.guildId}?tournament_id=${tournament?.id || ''}`);
+  } catch (err) { next(err); }
 });
 
 function startWeb() { app.listen(config.port, () => console.log(`Dashboard running on port ${config.port}`)); }

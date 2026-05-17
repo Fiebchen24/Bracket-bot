@@ -1,93 +1,106 @@
-const { db, log } = require('./database');
+const { query, log } = require('./database');
 
-function parseTeam(t) { return t ? { ...t, players: JSON.parse(t.players_json) } : null; }
+function parseTeam(t) { return t ? { ...t, players: JSON.parse(t.players_json || '[]') } : null; }
+function boolInt(v) { return v ? 1 : 0; }
 
-function getSettings(guildId) {
-  return db.prepare('SELECT * FROM guild_settings WHERE guild_id=?').get(guildId);
+async function getSettings(guildId) {
+  const r = await query('SELECT * FROM guild_settings WHERE guild_id=$1', [guildId]);
+  return r.rows[0] || null;
 }
-function upsertSettings(guildId, data) {
-  db.prepare(`INSERT INTO guild_settings (guild_id, bracket_channel_id, staff_role_id, match_category_id, updated_at)
-    VALUES (@guildId,@bracketChannelId,@staffRoleId,@matchCategoryId,CURRENT_TIMESTAMP)
-    ON CONFLICT(guild_id) DO UPDATE SET bracket_channel_id=@bracketChannelId, staff_role_id=@staffRoleId, match_category_id=@matchCategoryId, updated_at=CURRENT_TIMESTAMP`).run({ guildId, ...data });
+async function upsertSettings(guildId, data) {
+  await query(`INSERT INTO guild_settings (guild_id, bracket_channel_id, staff_role_id, match_category_id, updated_at)
+    VALUES ($1,$2,$3,$4,NOW())
+    ON CONFLICT(guild_id) DO UPDATE SET bracket_channel_id=$2, staff_role_id=$3, match_category_id=$4, updated_at=NOW()`,
+    [guildId, data.bracketChannelId || null, data.staffRoleId || null, data.matchCategoryId || null]);
 }
-function getActiveTournament(guildId) {
-  return db.prepare(`SELECT * FROM tournaments WHERE guild_id=? AND status IN ('registration','running','paused') ORDER BY id DESC LIMIT 1`).get(guildId);
+async function getActiveTournament(guildId) {
+  const r = await query(`SELECT * FROM tournaments WHERE guild_id=$1 AND status IN ('registration','running','paused') ORDER BY id DESC LIMIT 1`, [guildId]);
+  return r.rows[0] || null;
 }
-function getActiveTournaments(guildId) {
-  return db.prepare(`SELECT * FROM tournaments WHERE guild_id=? AND status IN ('registration','running','paused') ORDER BY id DESC`).all(guildId);
+async function getActiveTournaments(guildId) {
+  const r = await query(`SELECT * FROM tournaments WHERE guild_id=$1 AND status IN ('registration','running','paused') ORDER BY id DESC`, [guildId]);
+  return r.rows;
 }
-function getLatestTournament(guildId) {
-  return db.prepare(`SELECT * FROM tournaments WHERE guild_id=? ORDER BY id DESC LIMIT 1`).get(guildId);
+async function getLatestTournament(guildId) {
+  const r = await query(`SELECT * FROM tournaments WHERE guild_id=$1 ORDER BY id DESC LIMIT 1`, [guildId]);
+  return r.rows[0] || null;
 }
-function getTournamentById(id) {
-  return db.prepare('SELECT * FROM tournaments WHERE id=?').get(id);
+async function getTournamentById(id) {
+  const r = await query('SELECT * FROM tournaments WHERE id=$1', [id]);
+  return r.rows[0] || null;
 }
-function getTournamentForChannel(guildId, channelId, statuses = ['registration','running','paused']) {
-  const placeholders = statuses.map(() => '?').join(',');
-  return db.prepare(`SELECT * FROM tournaments WHERE guild_id=? AND status IN (${placeholders}) AND (signup_channel_id=? OR bracket_channel_id=? OR checkin_channel_id=?) ORDER BY id DESC LIMIT 1`).get(guildId, ...statuses, channelId, channelId, channelId);
+async function getTournamentForChannel(guildId, channelId, statuses = ['registration','running','paused']) {
+  const r = await query(`SELECT * FROM tournaments WHERE guild_id=$1 AND status = ANY($2) AND (signup_channel_id=$3 OR bracket_channel_id=$3 OR checkin_channel_id=$3) ORDER BY id DESC LIMIT 1`, [guildId, statuses, channelId]);
+  return r.rows[0] || null;
 }
-function getTournamentForSignupChannel(guildId, channelId) {
-  return db.prepare(`SELECT * FROM tournaments WHERE guild_id=? AND signup_channel_id=? AND status='registration' ORDER BY id DESC LIMIT 1`).get(guildId, channelId);
+async function getTournamentForSignupChannel(guildId, channelId) {
+  const r = await query(`SELECT * FROM tournaments WHERE guild_id=$1 AND signup_channel_id=$2 AND status='registration' ORDER BY id DESC LIMIT 1`, [guildId, channelId]);
+  return r.rows[0] || null;
 }
-function getTournamentForCheckinChannel(guildId, channelId) {
-  return db.prepare(`SELECT * FROM tournaments WHERE guild_id=? AND (checkin_channel_id=? OR signup_channel_id=?) AND status='registration' ORDER BY id DESC LIMIT 1`).get(guildId, channelId, channelId);
+async function getTournamentForCheckinChannel(guildId, channelId) {
+  const r = await query(`SELECT * FROM tournaments WHERE guild_id=$1 AND (checkin_channel_id=$2 OR signup_channel_id=$2) AND status='registration' ORDER BY id DESC LIMIT 1`, [guildId, channelId]);
+  return r.rows[0] || null;
 }
-function getTournamentForBracketChannel(guildId, channelId) {
-  return db.prepare(`SELECT * FROM tournaments WHERE guild_id=? AND bracket_channel_id=? AND status IN ('registration','running','paused') ORDER BY id DESC LIMIT 1`).get(guildId, channelId);
+async function getTournamentForBracketChannel(guildId, channelId) {
+  const r = await query(`SELECT * FROM tournaments WHERE guild_id=$1 AND bracket_channel_id=$2 AND status IN ('registration','running','paused') ORDER BY id DESC LIMIT 1`, [guildId, channelId]);
+  return r.rows[0] || null;
 }
-function createTournament(data) {
-  const info = db.prepare(`INSERT INTO tournaments (
+async function createTournament(data) {
+  const r = await query(`INSERT INTO tournaments (
     guild_id,name,team_size,format,created_by,bracket_channel_id,signup_channel_id,checkin_channel_id,match_category_id,staff_role_id,auto_match_channels,auto_voice,auto_archive,require_checkin,registration_role_id,cleanup_roles
-  ) VALUES (@guildId,@name,@teamSize,@format,@createdBy,@bracketChannelId,@signupChannelId,@checkinChannelId,@matchCategoryId,@staffRoleId,@autoMatchChannels,@autoVoice,@autoArchive,@requireCheckin,@registrationRoleId,@cleanupRoles)`).run(data);
-  log(data.guildId, info.lastInsertRowid, 'TOURNAMENT_CREATED', `${data.name} ${data.teamSize}v${data.teamSize} ${data.format}`);
-  return getTournamentById(info.lastInsertRowid);
+  ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`, [
+    data.guildId, data.name, data.teamSize, data.format, data.createdBy, data.bracketChannelId, data.signupChannelId,
+    data.checkinChannelId || null, data.matchCategoryId || null, data.staffRoleId || null, boolInt(data.autoMatchChannels), boolInt(data.autoVoice), boolInt(data.autoArchive), boolInt(data.requireCheckin), data.registrationRoleId || null, boolInt(data.cleanupRoles)
+  ]);
+  const id = r.rows[0].id;
+  await log(data.guildId, id, 'TOURNAMENT_CREATED', `${data.name} ${data.teamSize}v${data.teamSize} ${data.format}`);
+  return getTournamentById(id);
 }
-function updateTournament(id, fields) {
-  const keys = Object.keys(fields);
-  if (!keys.length) return;
-  const set = keys.map(k => `${k}=@${k}`).join(', ');
-  db.prepare(`UPDATE tournaments SET ${set}, updated_at=CURRENT_TIMESTAMP WHERE id=@id`).run({ id, ...fields });
+async function updateTournament(id, fields) {
+  const keys = Object.keys(fields); if (!keys.length) return;
+  const values = keys.map(k => fields[k]);
+  const set = keys.map((k,i) => `${k}=$${i+1}`).join(', ');
+  await query(`UPDATE tournaments SET ${set}, updated_at=NOW() WHERE id=$${keys.length+1}`, [...values, id]);
 }
-function resetTournament(guildId, id = null) {
-  const t = id ? getTournamentById(id) : getActiveTournament(guildId);
+async function resetTournament(guildId, id = null) {
+  const t = id ? await getTournamentById(id) : await getActiveTournament(guildId);
   if (!t || t.guild_id !== guildId) return null;
-  updateTournament(t.id, { status: 'ended' });
-  log(guildId, t.id, 'TOURNAMENT_RESET', 'Tournament ended/reset');
+  await updateTournament(t.id, { status: 'ended' });
+  await log(guildId, t.id, 'TOURNAMENT_RESET', 'Tournament ended/reset');
   return t;
 }
-function addTeam(tournamentId, name, players, checkedIn = 0) {
-  const info = db.prepare('INSERT INTO teams (tournament_id,name,players_json,checked_in) VALUES (?,?,?,?)').run(tournamentId, name, JSON.stringify(players), checkedIn ? 1 : 0);
-  return getTeam(info.lastInsertRowid);
+async function addTeam(tournamentId, name, players, checkedIn = 0) {
+  const r = await query('INSERT INTO teams (tournament_id,name,players_json,checked_in) VALUES ($1,$2,$3,$4) RETURNING id', [tournamentId, name, JSON.stringify(players), checkedIn ? 1 : 0]);
+  return getTeam(r.rows[0].id);
 }
-function getTeams(tournamentId) {
-  return db.prepare('SELECT * FROM teams WHERE tournament_id=? AND active=1 ORDER BY id ASC').all(tournamentId).map(parseTeam);
+async function getTeams(tournamentId) {
+  const r = await query('SELECT * FROM teams WHERE tournament_id=$1 AND active=1 ORDER BY id ASC', [tournamentId]);
+  return r.rows.map(parseTeam);
 }
-function getTeam(id) { return parseTeam(db.prepare('SELECT * FROM teams WHERE id=?').get(id)); }
-function updateTeam(id, fields) {
+async function getTeam(id) { const r = await query('SELECT * FROM teams WHERE id=$1', [id]); return parseTeam(r.rows[0]); }
+async function updateTeam(id, fields) {
   const keys = Object.keys(fields); if (!keys.length) return;
-  const set = keys.map(k => `${k}=@${k}`).join(', ');
-  db.prepare(`UPDATE teams SET ${set} WHERE id=@id`).run({ id, ...fields });
+  const values = keys.map(k => fields[k]); const set = keys.map((k,i) => `${k}=$${i+1}`).join(', ');
+  await query(`UPDATE teams SET ${set} WHERE id=$${keys.length+1}`, [...values, id]);
 }
-function createMatch(tournamentId, round, matchNumber, team1Id, team2Id, status='pending', winnerTeamId=null, bracketGroup='winners') {
-  const info = db.prepare('INSERT INTO matches (tournament_id,round,match_number,team1_id,team2_id,status,winner_team_id,bracket_group) VALUES (?,?,?,?,?,?,?,?)').run(tournamentId, round, matchNumber, team1Id, team2Id, status, winnerTeamId, bracketGroup);
-  return getMatch(info.lastInsertRowid);
+async function createMatch(tournamentId, round, matchNumber, team1Id, team2Id, status='pending', winnerTeamId=null, bracketGroup='winners') {
+  const r = await query('INSERT INTO matches (tournament_id,round,match_number,team1_id,team2_id,status,winner_team_id,bracket_group) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id', [tournamentId, round, matchNumber, team1Id, team2Id, status, winnerTeamId, bracketGroup]);
+  return getMatch(r.rows[0].id);
 }
-function getMatches(tournamentId) {
-  return db.prepare('SELECT * FROM matches WHERE tournament_id=? ORDER BY round ASC, match_number ASC').all(tournamentId);
-}
-function getMatch(id) { return db.prepare('SELECT * FROM matches WHERE id=?').get(id); }
-function updateMatch(id, fields) {
+async function getMatches(tournamentId) { const r = await query('SELECT * FROM matches WHERE tournament_id=$1 ORDER BY round ASC, match_number ASC', [tournamentId]); return r.rows; }
+async function getMatch(id) { const r = await query('SELECT * FROM matches WHERE id=$1', [id]); return r.rows[0] || null; }
+async function updateMatch(id, fields) {
   const keys = Object.keys(fields); if (!keys.length) return;
-  const set = keys.map(k => `${k}=@${k}`).join(', ');
-  db.prepare(`UPDATE matches SET ${set}, updated_at=CURRENT_TIMESTAMP WHERE id=@id`).run({ id, ...fields });
+  const values = keys.map(k => fields[k]); const set = keys.map((k,i) => `${k}=$${i+1}`).join(', ');
+  await query(`UPDATE matches SET ${set}, updated_at=NOW() WHERE id=$${keys.length+1}`, [...values, id]);
 }
-function getRoundMatches(tournamentId, round, bracketGroup = null) {
-  if (bracketGroup) return db.prepare('SELECT * FROM matches WHERE tournament_id=? AND round=? AND bracket_group=? ORDER BY match_number ASC').all(tournamentId, round, bracketGroup);
-  return db.prepare('SELECT * FROM matches WHERE tournament_id=? AND round=? ORDER BY match_number ASC').all(tournamentId, round);
+async function getRoundMatches(tournamentId, round, bracketGroup = null) {
+  if (bracketGroup) { const r = await query('SELECT * FROM matches WHERE tournament_id=$1 AND round=$2 AND bracket_group=$3 ORDER BY match_number ASC', [tournamentId, round, bracketGroup]); return r.rows; }
+  const r = await query('SELECT * FROM matches WHERE tournament_id=$1 AND round=$2 ORDER BY match_number ASC', [tournamentId, round]); return r.rows;
 }
-function getGroupRoundMatches(tournamentId, bracketGroup, round) { return getRoundMatches(tournamentId, round, bracketGroup); }
-function getLogs(tournamentId, limit = 50) { return db.prepare('SELECT * FROM logs WHERE tournament_id=? ORDER BY id DESC LIMIT ?').all(tournamentId, limit); }
-function getOpenMatchesWithChannels(tournamentId) { return db.prepare(`SELECT * FROM matches WHERE tournament_id=? AND status IN ('pending','reported')`).all(tournamentId); }
+async function getGroupRoundMatches(tournamentId, bracketGroup, round) { return getRoundMatches(tournamentId, round, bracketGroup); }
+async function getLogs(tournamentId, limit = 50) { const r = await query('SELECT * FROM logs WHERE tournament_id=$1 ORDER BY id DESC LIMIT $2', [tournamentId, limit]); return r.rows; }
+async function getOpenMatchesWithChannels(tournamentId) { const r = await query(`SELECT * FROM matches WHERE tournament_id=$1 AND status IN ('pending','reported')`, [tournamentId]); return r.rows; }
 
 module.exports = {
   getSettings, upsertSettings, getActiveTournament, getActiveTournaments, getLatestTournament, getTournamentById,
