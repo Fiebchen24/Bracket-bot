@@ -37,6 +37,9 @@ CREATE TABLE IF NOT EXISTS tournaments (
   auto_voice INTEGER DEFAULT 0,
   auto_archive INTEGER DEFAULT 0,
   require_checkin INTEGER DEFAULT 0,
+  registration_role_id TEXT,
+  cleanup_roles INTEGER DEFAULT 0,
+  winner_team_id INTEGER,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
@@ -62,6 +65,7 @@ CREATE TABLE IF NOT EXISTS matches (
   winner_team_id INTEGER,
   reported_winner_id INTEGER,
   status TEXT NOT NULL DEFAULT 'pending',
+  bracket_group TEXT DEFAULT 'winners',
   text_channel_id TEXT,
   voice_channel_id TEXT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -86,9 +90,9 @@ function ensureColumn(table, column, definition) {
 for (const [col, def] of [
   ['bracket_channel_id', 'TEXT'], ['signup_channel_id', 'TEXT'], ['checkin_channel_id', 'TEXT'],
   ['match_category_id', 'TEXT'], ['staff_role_id', 'TEXT'], ['auto_match_channels', 'INTEGER DEFAULT 0'],
-  ['auto_voice', 'INTEGER DEFAULT 0'], ['auto_archive', 'INTEGER DEFAULT 0'], ['require_checkin', 'INTEGER DEFAULT 0']
+  ['auto_voice', 'INTEGER DEFAULT 0'], ['auto_archive', 'INTEGER DEFAULT 0'], ['require_checkin', 'INTEGER DEFAULT 0'], ['registration_role_id', 'TEXT'], ['cleanup_roles', 'INTEGER DEFAULT 0'], ['winner_team_id', 'INTEGER']
 ]) ensureColumn('tournaments', col, def);
-for (const [col, def] of [['text_channel_id', 'TEXT'], ['voice_channel_id', 'TEXT']]) ensureColumn('matches', col, def);
+for (const [col, def] of [['text_channel_id', 'TEXT'], ['voice_channel_id', 'TEXT'], ['bracket_group', "TEXT DEFAULT 'winners'"]]) ensureColumn('matches', col, def);
 
 function log(guildId, tournamentId, action, details='') {
   db.prepare('INSERT INTO logs (guild_id,tournament_id,action,details) VALUES (?,?,?,?)').run(guildId, tournamentId, action, details);

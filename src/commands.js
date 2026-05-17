@@ -16,23 +16,23 @@ module.exports = [
     .addChannelOption(o => o.setName('signup_channel').setDescription('Channel where teams register').setRequired(true).addChannelTypes(ChannelType.GuildText))
     .addChannelOption(o => o.setName('bracket_channel').setDescription('Channel where the bracket is posted').setRequired(true).addChannelTypes(ChannelType.GuildText))
     .addRoleOption(o => o.setName('staff_role').setDescription('Staff role for this tournament').setRequired(true))
+    .addRoleOption(o => o.setName('registration_role').setDescription('Optional role assigned to every registered player').setRequired(false))
     .addChannelOption(o => o.setName('match_category').setDescription('Category where match channels are created').setRequired(false).addChannelTypes(ChannelType.GuildCategory))
     .addChannelOption(o => o.setName('checkin_channel').setDescription('Optional check-in channel').setRequired(false).addChannelTypes(ChannelType.GuildText))
     .addBooleanOption(o => o.setName('require_checkin').setDescription('Require teams to check in before starting?').setRequired(false))
     .addBooleanOption(o => o.setName('auto_match_channels').setDescription('Create text channels for matches?').setRequired(false))
     .addBooleanOption(o => o.setName('auto_voice').setDescription('Create voice channels for matches?').setRequired(false))
     .addBooleanOption(o => o.setName('auto_archive').setDescription('Archive match channels after approval?').setRequired(false))
+    .addBooleanOption(o => o.setName('cleanup_roles').setDescription('Remove registration role when tournament ends?').setRequired(false))
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
-  new SlashCommandBuilder().setName('register').setDescription('Register a team in the tournament signup channel')
-    .addStringOption(o => o.setName('team_name').setDescription('Team name').setRequired(true))
-    .addUserOption(o => o.setName('player1').setDescription('Player 1').setRequired(true))
+  new SlashCommandBuilder().setName('register').setDescription('Register in the tournament signup channel. No team name needed.')
+    .addUserOption(o => o.setName('player1').setDescription('Player 1 / Team display name').setRequired(true))
     .addUserOption(o => o.setName('player2').setDescription('Player 2').setRequired(false))
     .addUserOption(o => o.setName('player3').setDescription('Player 3').setRequired(false))
     .addUserOption(o => o.setName('player4').setDescription('Player 4').setRequired(false)),
 
-  new SlashCommandBuilder().setName('checkin').setDescription('Check in your team for the tournament')
-    .addStringOption(o => o.setName('team_name').setDescription('Team name').setRequired(true)),
+  new SlashCommandBuilder().setName('checkin').setDescription('Check in your registered team for the tournament'),
 
   new SlashCommandBuilder().setName('startbracket').setDescription('Start a tournament').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
     .addIntegerOption(o => o.setName('tournament_id').setDescription('Optional tournament ID if multiple tournaments exist').setRequired(false)),
@@ -42,7 +42,7 @@ module.exports = [
 
   new SlashCommandBuilder().setName('reportwin').setDescription('Report winner for a match')
     .addIntegerOption(o => o.setName('match_id').setDescription('Match ID from /bracket').setRequired(true))
-    .addStringOption(o => o.setName('winner_team_name').setDescription('Winner team name OR mention one winning player').setRequired(true)),
+    .addStringOption(o => o.setName('winner').setDescription('Winner display name OR mention one winning player').setRequired(true)),
 
   new SlashCommandBuilder().setName('approvewin').setDescription('Approve a reported winner')
     .addIntegerOption(o => o.setName('match_id').setDescription('Match ID').setRequired(true))
@@ -50,7 +50,7 @@ module.exports = [
 
   new SlashCommandBuilder().setName('forcematchwin').setDescription('Staff: set/approve a winner instantly')
     .addIntegerOption(o => o.setName('match_id').setDescription('Match ID').setRequired(true))
-    .addStringOption(o => o.setName('winner_team_name').setDescription('Winner team name OR mention one winning player').setRequired(true))
+    .addStringOption(o => o.setName('winner').setDescription('Winner display name OR mention one winning player').setRequired(true))
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
   new SlashCommandBuilder().setName('teamlist').setDescription('Show registered teams')
@@ -65,7 +65,7 @@ module.exports = [
 
   new SlashCommandBuilder().setName('dqteam').setDescription('DQ a team and award opponent if possible')
     .addIntegerOption(o => o.setName('match_id').setDescription('Match ID').setRequired(true))
-    .addStringOption(o => o.setName('team_name').setDescription('Team to DQ').setRequired(true))
+    .addStringOption(o => o.setName('team').setDescription('Team display name or mention a player').setRequired(true))
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
   new SlashCommandBuilder().setName('resetbracket').setDescription('End/reset a tournament').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)

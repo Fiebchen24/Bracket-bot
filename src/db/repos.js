@@ -37,8 +37,8 @@ function getTournamentForBracketChannel(guildId, channelId) {
 }
 function createTournament(data) {
   const info = db.prepare(`INSERT INTO tournaments (
-    guild_id,name,team_size,format,created_by,bracket_channel_id,signup_channel_id,checkin_channel_id,match_category_id,staff_role_id,auto_match_channels,auto_voice,auto_archive,require_checkin
-  ) VALUES (@guildId,@name,@teamSize,@format,@createdBy,@bracketChannelId,@signupChannelId,@checkinChannelId,@matchCategoryId,@staffRoleId,@autoMatchChannels,@autoVoice,@autoArchive,@requireCheckin)`).run(data);
+    guild_id,name,team_size,format,created_by,bracket_channel_id,signup_channel_id,checkin_channel_id,match_category_id,staff_role_id,auto_match_channels,auto_voice,auto_archive,require_checkin,registration_role_id,cleanup_roles
+  ) VALUES (@guildId,@name,@teamSize,@format,@createdBy,@bracketChannelId,@signupChannelId,@checkinChannelId,@matchCategoryId,@staffRoleId,@autoMatchChannels,@autoVoice,@autoArchive,@requireCheckin,@registrationRoleId,@cleanupRoles)`).run(data);
   log(data.guildId, info.lastInsertRowid, 'TOURNAMENT_CREATED', `${data.name} ${data.teamSize}v${data.teamSize} ${data.format}`);
   return getTournamentById(info.lastInsertRowid);
 }
@@ -68,8 +68,8 @@ function updateTeam(id, fields) {
   const set = keys.map(k => `${k}=@${k}`).join(', ');
   db.prepare(`UPDATE teams SET ${set} WHERE id=@id`).run({ id, ...fields });
 }
-function createMatch(tournamentId, round, matchNumber, team1Id, team2Id, status='pending', winnerTeamId=null) {
-  const info = db.prepare('INSERT INTO matches (tournament_id,round,match_number,team1_id,team2_id,status,winner_team_id) VALUES (?,?,?,?,?,?,?)').run(tournamentId, round, matchNumber, team1Id, team2Id, status, winnerTeamId);
+function createMatch(tournamentId, round, matchNumber, team1Id, team2Id, status='pending', winnerTeamId=null, bracketGroup='winners') {
+  const info = db.prepare('INSERT INTO matches (tournament_id,round,match_number,team1_id,team2_id,status,winner_team_id,bracket_group) VALUES (?,?,?,?,?,?,?,?)').run(tournamentId, round, matchNumber, team1Id, team2Id, status, winnerTeamId, bracketGroup);
   return getMatch(info.lastInsertRowid);
 }
 function getMatches(tournamentId) {
@@ -81,12 +81,17 @@ function updateMatch(id, fields) {
   const set = keys.map(k => `${k}=@${k}`).join(', ');
   db.prepare(`UPDATE matches SET ${set}, updated_at=CURRENT_TIMESTAMP WHERE id=@id`).run({ id, ...fields });
 }
-function getRoundMatches(tournamentId, round) { return db.prepare('SELECT * FROM matches WHERE tournament_id=? AND round=? ORDER BY match_number ASC').all(tournamentId, round); }
+function getRoundMatches(tournamentId, round, bracketGroup = null) {
+  if (bracketGroup) return db.prepare('SELECT * FROM matches WHERE tournament_id=? AND round=? AND bracket_group=? ORDER BY match_number ASC').all(tournamentId, round, bracketGroup);
+  return db.prepare('SELECT * FROM matches WHERE tournament_id=? AND round=? ORDER BY match_number ASC').all(tournamentId, round);
+}
+function getGroupRoundMatches(tournamentId, bracketGroup, round) { return getRoundMatches(tournamentId, round, bracketGroup); }
+function getLogs(tournamentId, limit = 50) { return db.prepare('SELECT * FROM logs WHERE tournament_id=? ORDER BY id DESC LIMIT ?').all(tournamentId, limit); }
 function getOpenMatchesWithChannels(tournamentId) { return db.prepare(`SELECT * FROM matches WHERE tournament_id=? AND status IN ('pending','reported')`).all(tournamentId); }
 
 module.exports = {
   getSettings, upsertSettings, getActiveTournament, getActiveTournaments, getLatestTournament, getTournamentById,
   getTournamentForChannel, getTournamentForSignupChannel, getTournamentForCheckinChannel, getTournamentForBracketChannel,
   createTournament, updateTournament, resetTournament, addTeam, getTeams, getTeam, updateTeam, createMatch, getMatches,
-  getMatch, updateMatch, getRoundMatches, getOpenMatchesWithChannels, log
+  getMatch, updateMatch, getRoundMatches, getGroupRoundMatches, getOpenMatchesWithChannels, getLogs, log
 };

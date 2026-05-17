@@ -1,6 +1,111 @@
-<!doctype html><html><head><title>Guild Admin</title><link rel="stylesheet" href="/public/style.css"></head><body><main class="card wide"><a href="/dashboard">← Back</a><h1>Guild Admin</h1><p>Guild ID: <code><%= guildId %></code></p>
-<h2>Active Tournaments</h2>
-<% if(tournaments && tournaments.length){ %><ul><% tournaments.forEach(t=>{ %><li><a href="/guild/<%= guildId %>?tournament_id=<%= t.id %>">#<%= t.id %> <%= t.name %></a> — <%= t.status %> — signup <code><%= t.signup_channel_id %></code></li><% }) %></ul><% } else { %><p>No active tournaments. Create events in Discord with <code>/createbracket</code> so channels can be selected safely.</p><% } %>
-<h2>Selected Tournament</h2>
-<% if(tournament){ %><p><b>#<%= tournament.id %> <%= tournament.name %></b> — <%= tournament.team_size %>v<%= tournament.team_size %> — <%= tournament.format %> — <%= tournament.status %></p><p>Signup: <code><%= tournament.signup_channel_id %></code> | Bracket: <code><%= tournament.bracket_channel_id %></code></p><pre><%= bracketText %></pre><form method="post" action="/guild/<%= guildId %>/start"><input type="hidden" name="tournament_id" value="<%= tournament.id %>"><button class="btn">Start Bracket</button></form><form method="post" action="/guild/<%= guildId %>/approve"><input name="match_id" placeholder="Match ID"><button>Approve reported win</button></form><form method="post" action="/guild/<%= guildId %>/reset"><input type="hidden" name="tournament_id" value="<%= tournament.id %>"><button class="danger">Reset/End</button></form><% } %>
-</main></body></html>
+<!doctype html>
+<html>
+<head>
+  <title>Bracket Events Dashboard</title>
+  <link rel="stylesheet" href="/public/style.css">
+</head>
+<body>
+<main class="card wide">
+  <a href="/dashboard">← Back</a>
+  <h1>Bracket Events Admin</h1>
+  <p>Guild ID: <code><%= guildId %></code></p>
+
+  <section class="panel">
+    <h2>Active Tournaments</h2>
+    <% if(tournaments && tournaments.length){ %>
+      <div class="pill-row">
+        <% tournaments.forEach(t=>{ %>
+          <a class="pill <%= tournament && tournament.id===t.id ? 'active' : '' %>" href="/guild/<%= guildId %>?tournament_id=<%= t.id %>">#<%= t.id %> <%= t.name %> · <%= t.status %></a>
+        <% }) %>
+      </div>
+    <% } else { %>
+      <p>No active tournaments. Create events in Discord with <code>/createbracket</code> so channels can be selected safely.</p>
+    <% } %>
+  </section>
+
+  <% if(tournament){ %>
+    <section class="panel hero">
+      <div>
+        <h2>#<%= tournament.id %> <%= tournament.name %></h2>
+        <p><b><%= tournament.team_size %>v<%= tournament.team_size %></b> · <%= tournament.format %> · <%= tournament.status %></p>
+        <p>Signup <code><%= tournament.signup_channel_id %></code> · Bracket <code><%= tournament.bracket_channel_id %></code> · Check-in <b><%= tournament.require_checkin ? 'required' : 'off' %></b></p>
+        <% if(tournament.registration_role_id){ %><p>Registration role: <code><%= tournament.registration_role_id %></code></p><% } %>
+      </div>
+      <div class="actions">
+        <% if(tournament.status === 'registration'){ %>
+        <form method="post" action="/guild/<%= guildId %>/start"><input type="hidden" name="tournament_id" value="<%= tournament.id %>"><button class="btn">Start Bracket</button></form>
+        <% } %>
+        <form method="post" action="/guild/<%= guildId %>/reset"><input type="hidden" name="tournament_id" value="<%= tournament.id %>"><button class="danger">End Tournament</button></form>
+      </div>
+    </section>
+
+    <section class="grid2">
+      <div class="panel">
+        <h2>Teams</h2>
+        <% if(data.teams.length){ %>
+          <% data.teams.forEach(team=>{ %>
+            <div class="team-card">
+              <form method="post" action="/guild/<%= guildId %>/edit-team" class="inline-form">
+                <input type="hidden" name="team_id" value="<%= team.id %>">
+                <input name="name" value="<%= team.name %>">
+                <button>Save</button>
+              </form>
+              <div class="muted"><%= team.players.map(p => '@'+p).join(' · ') %></div>
+              <div><%= team.checked_in ? '✅ Checked in' : tournament.require_checkin ? '⏳ Not checked in' : '➖ Check-in off' %></div>
+              <% if(tournament.status === 'registration'){ %>
+              <form method="post" action="/guild/<%= guildId %>/remove-team"><input type="hidden" name="team_id" value="<%= team.id %>"><button class="danger small">Remove</button></form>
+              <% } %>
+            </div>
+          <% }) %>
+        <% } else { %><p>No teams yet.</p><% } %>
+      </div>
+
+      <div class="panel">
+        <h2>Admin Controls</h2>
+        <form method="post" action="/guild/<%= guildId %>/approve" class="stacked"><label>Approve reported match ID</label><input name="match_id" placeholder="Match ID"><button>Approve</button></form>
+        <form method="post" action="/guild/<%= guildId %>/force" class="stacked"><label>Force match winner</label><input name="match_id" placeholder="Match ID"><input name="winner_team_id" placeholder="Winner Team ID"><button>Force Win</button></form>
+        <h3>Logs</h3>
+        <div class="logs"><% logs.forEach(l=>{ %><div><b><%= l.action %></b> · <%= l.details %></div><% }) %></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Graphic Bracket Tree</h2>
+      <% const groups = ['winners','losers','grand']; const labels = {winners:'Winner Bracket', losers:'Loser Bracket', grand:'Grand Final'}; %>
+      <% groups.forEach(group=>{ const gm = data.matches.filter(m => (m.bracket_group || 'winners') === group); if(!gm.length) return; const rounds = [...new Set(gm.map(m=>m.round))].sort((a,b)=>a-b); %>
+        <h3><%= labels[group] %></h3>
+        <div class="bracket-scroll">
+          <div class="bracket-tree">
+            <% rounds.forEach(round=>{ const rm = gm.filter(m=>m.round===round); %>
+              <div class="round-column">
+                <div class="round-title">Round <%= round %></div>
+                <% rm.forEach(match=>{ %>
+                  <div class="match-box <%= match.status %>">
+                    <div class="match-id">#<%= match.id %> · M<%= match.match_number %></div>
+                    <div class="slot <%= match.winner_team_id === match.team1_id ? 'winner' : '' %>"><span><%= match.team1 ? match.team1.name : 'BYE' %></span><small><%= match.team1 ? match.team1.players.map(p=>'@'+p).join(', ') : '' %></small></div>
+                    <div class="slot <%= match.winner_team_id === match.team2_id ? 'winner' : '' %>"><span><%= match.team2 ? match.team2.name : 'BYE' %></span><small><%= match.team2 ? match.team2.players.map(p=>'@'+p).join(', ') : '' %></small></div>
+                    <div class="status"><%= match.status %><% if(match.reportedWinner){ %> · reported: <%= match.reportedWinner.name %><% } %></div>
+                    <% if(match.status !== 'approved' && match.status !== 'bye' && match.team1 && match.team2){ %>
+                    <form method="post" action="/guild/<%= guildId %>/force" class="mini-actions">
+                      <input type="hidden" name="match_id" value="<%= match.id %>">
+                      <button name="winner_team_id" value="<%= match.team1.id %>">Win <%= match.team1.name %></button>
+                      <button name="winner_team_id" value="<%= match.team2.id %>">Win <%= match.team2.name %></button>
+                    </form>
+                    <% } %>
+                  </div>
+                <% }) %>
+              </div>
+            <% }) %>
+          </div>
+        </div>
+      <% }) %>
+    </section>
+
+    <section class="panel">
+      <h2>Text Bracket</h2>
+      <pre><%= bracketText %></pre>
+    </section>
+  <% } %>
+</main>
+</body>
+</html>
