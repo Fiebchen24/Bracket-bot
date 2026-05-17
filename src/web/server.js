@@ -19,20 +19,32 @@ app.use(passport.session());
 passport.serializeUser((user, done) => done(null, user));
 passport.deserializeUser((obj, done) => done(null, obj));
 
-if (config.clientSecret) {
-  passport.use(new DiscordStrategy({
+let discordAuthReady = false;
+
+if (!config.clientId) console.warn('Dashboard OAuth missing CLIENT_ID / DISCORD_CLIENT_ID');
+if (!config.clientSecret) console.warn('Dashboard OAuth missing CLIENT_SECRET / DISCORD_CLIENT_SECRET');
+if (!config.baseUrl) console.warn('Dashboard OAuth missing BASE_URL');
+
+if (config.clientId && config.clientSecret && config.baseUrl) {
+  passport.use('discord', new DiscordStrategy({
     clientID: config.clientId,
     clientSecret: config.clientSecret,
     callbackURL: `${config.baseUrl}/auth/discord/callback`,
     scope: ['identify', 'guilds']
   }, (accessToken, refreshToken, profile, done) => done(null, profile)));
+  discordAuthReady = true;
+  console.log(`Discord OAuth ready. Callback: ${config.baseUrl}/auth/discord/callback`);
 }
 
 function requireAuth(req, res, next) { if (req.isAuthenticated?.()) return next(); res.redirect('/login'); }
+function requireDiscordAuthConfigured(req, res, next) {
+  if (discordAuthReady) return next();
+  return res.status(500).send('Discord login is not configured. Please set CLIENT_ID, CLIENT_SECRET or DISCORD_CLIENT_SECRET, BASE_URL and SESSION_SECRET in Render.');
+}
 
 app.get('/', (req, res) => res.render('index', { user: req.user }));
-app.get('/login', passport.authenticate('discord'));
-app.get('/auth/discord/callback', passport.authenticate('discord', { failureRedirect: '/' }), (req, res) => res.redirect('/dashboard'));
+app.get('/login', requireDiscordAuthConfigured, passport.authenticate('discord'));
+app.get('/auth/discord/callback', requireDiscordAuthConfigured, passport.authenticate('discord', { failureRedirect: '/' }), (req, res) => res.redirect('/dashboard'));
 app.get('/logout', (req, res, next) => req.logout(err => err ? next(err) : res.redirect('/')));
 
 app.get('/dashboard', requireAuth, (req, res) => {
