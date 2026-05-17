@@ -161,6 +161,23 @@ async function approveMatch(interaction, tournament, matchId) {
 
 client.once('clientReady', () => console.log(`Logged in as ${client.user.tag}`));
 
+client.on('error', err => console.error('Discord client error:', err));
+process.on('unhandledRejection', err => console.error('Unhandled rejection:', err));
+process.on('uncaughtException', err => console.error('Uncaught exception:', err));
+
+async function safeInteractionError(interaction, message) {
+  const payload = hidden(message);
+  try {
+    if (interaction.replied || interaction.deferred) {
+      await interaction.followUp(payload).catch(e => console.error('Failed to follow up interaction error:', e?.message || e));
+    } else {
+      await interaction.reply(payload).catch(e => console.error('Failed to reply interaction error:', e?.message || e));
+    }
+  } catch (e) {
+    console.error('Failed to send interaction error:', e?.message || e);
+  }
+}
+
 client.on('interactionCreate', async interaction => {
   try {
     if (interaction.isButton()) {
@@ -384,9 +401,8 @@ client.on('interactionCreate', async interaction => {
     }
   } catch (err) {
     console.error(err);
-    const payload = hidden(`❌ Error: ${err.message}`);
-    if (interaction.replied || interaction.deferred) return interaction.followUp(payload);
-    return interaction.reply(payload);
+    await safeInteractionError(interaction, `❌ Error: ${err.message}`);
+    return;
   }
 });
 
