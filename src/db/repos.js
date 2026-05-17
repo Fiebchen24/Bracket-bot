@@ -1,6 +1,17 @@
 const { query, log } = require('./database');
 
-function parseTeam(t) { return t ? { ...t, players: JSON.parse(t.players_json || '[]') } : null; }
+
+function parseTeam(t) {
+  if (!t) return null;
+  let raw = [];
+  try { raw = JSON.parse(t.players_json || '[]'); } catch { raw = []; }
+  const player_details = raw.map(p => {
+    if (typeof p === 'string') return { id: p, name: `@${p}`, username: '', avatar: null };
+    return { id: String(p.id), name: p.name || p.displayName || p.username || `@${p.id}`, username: p.username || '', avatar: p.avatar || null };
+  }).filter(p => p.id);
+  return { ...t, players: player_details.map(p => p.id), player_details };
+}
+
 function boolInt(v) { return v ? 1 : 0; }
 
 async function getSettings(guildId) {
@@ -47,10 +58,10 @@ async function getTournamentForBracketChannel(guildId, channelId) {
 }
 async function createTournament(data) {
   const r = await query(`INSERT INTO tournaments (
-    guild_id,name,team_size,format,created_by,bracket_channel_id,signup_channel_id,checkin_channel_id,match_category_id,staff_role_id,auto_match_channels,auto_voice,auto_archive,require_checkin,registration_role_id,cleanup_roles
-  ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`, [
+    guild_id,name,team_size,format,created_by,bracket_channel_id,signup_channel_id,checkin_channel_id,match_category_id,staff_role_id,auto_match_channels,auto_voice,auto_archive,require_checkin,registration_role_id,cleanup_roles,auto_delete_match_channels,delete_delay_minutes
+  ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id`, [
     data.guildId, data.name, data.teamSize, data.format, data.createdBy, data.bracketChannelId, data.signupChannelId,
-    data.checkinChannelId || null, data.matchCategoryId || null, data.staffRoleId || null, boolInt(data.autoMatchChannels), boolInt(data.autoVoice), boolInt(data.autoArchive), boolInt(data.requireCheckin), data.registrationRoleId || null, boolInt(data.cleanupRoles)
+    data.checkinChannelId || null, data.matchCategoryId || null, data.staffRoleId || null, boolInt(data.autoMatchChannels), boolInt(data.autoVoice), boolInt(data.autoArchive), boolInt(data.requireCheckin), data.registrationRoleId || null, boolInt(data.cleanupRoles), boolInt(data.autoDeleteMatchChannels), Number(data.deleteDelayMinutes || 0)
   ]);
   const id = r.rows[0].id;
   await log(data.guildId, id, 'TOURNAMENT_CREATED', `${data.name} ${data.teamSize}v${data.teamSize} ${data.format}`);
