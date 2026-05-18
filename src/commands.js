@@ -22,9 +22,7 @@ module.exports = [
     .addBooleanOption(o => o.setName('require_checkin').setDescription('Require teams to check in before starting?').setRequired(false))
     .addBooleanOption(o => o.setName('auto_match_channels').setDescription('Create text channels for matches?').setRequired(false))
     .addBooleanOption(o => o.setName('auto_voice').setDescription('Create voice channels for matches?').setRequired(false))
-    .addBooleanOption(o => o.setName('auto_archive').setDescription('Rename match channels to done after approval?').setRequired(false))
-    .addBooleanOption(o => o.setName('auto_delete_match_channels').setDescription('Delete match text/voice channels after match ends?').setRequired(false))
-    .addIntegerOption(o => o.setName('delete_delay_minutes').setDescription('Delay before deleting match channels').setRequired(false).addChoices({name:'Immediately', value:0},{name:'5 minutes', value:5},{name:'10 minutes', value:10},{name:'30 minutes', value:30}))
+    .addBooleanOption(o => o.setName('auto_archive').setDescription('Archive match channels after approval?').setRequired(false))
     .addBooleanOption(o => o.setName('cleanup_roles').setDescription('Remove registration role when tournament ends?').setRequired(false))
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
@@ -54,6 +52,10 @@ module.exports = [
     .addIntegerOption(o => o.setName('match_id').setDescription('Match ID').setRequired(true))
     .addStringOption(o => o.setName('winner').setDescription('Winner display name OR mention one winning player').setRequired(true))
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+
+  new SlashCommandBuilder().setName('unreg').setDescription('Unregister your team before the bracket starts')
+    .addUserOption(o => o.setName('user').setDescription('Staff only: unregister team containing this user').setRequired(false))
+    .addIntegerOption(o => o.setName('tournament_id').setDescription('Optional tournament ID').setRequired(false)),
 
   new SlashCommandBuilder().setName('teamlist').setDescription('Show registered teams')
     .addIntegerOption(o => o.setName('tournament_id').setDescription('Optional tournament ID').setRequired(false)),

@@ -18,7 +18,6 @@ function shortLabel(text) { return String(text || 'Team').slice(0, 75); }
 function asBool(v) { return v ? 1 : 0; }
 function displayNameFromUser(user) { return user.globalName || user.username || user.displayName || `Player-${user.id}`; }
 function safeChannelPart(s) { return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 25) || 'team'; }
-function userToPlayer(user) { return { id: user.id, name: displayNameFromUser(user), username: user.username, avatar: user.displayAvatarURL({ extension: 'png', size: 64 }) }; }
 
 async function isStaff(interaction, tournament = null) {
   const settings = await repo.getSettings(interaction.guildId);
@@ -41,11 +40,9 @@ async function teamNameFactory(tournament) {
   const teams = await repo.getTeams(tournament.id);
   return id => id ? (teams.find(t => t.id === id)?.name || `Team ${id}`) : 'BYE';
 }
-async function buildMatchButtons(tournament, onlyMatchId = null) {
+async function buildMatchButtons(tournament) {
   const teamName = await teamNameFactory(tournament);
-  let matches = (await repo.getMatches(tournament.id)).filter(m => m.status === 'pending' || m.status === 'reported');
-  if (onlyMatchId) matches = matches.filter(m => m.id === Number(onlyMatchId));
-  matches = matches.slice(0, 5);
+  const matches = (await repo.getMatches(tournament.id)).filter(m => m.status === 'pending' || m.status === 'reported').slice(0, 5);
   const rows = [];
   for (const m of matches) {
     const row = new ActionRowBuilder();
@@ -57,6 +54,17 @@ async function buildMatchButtons(tournament, onlyMatchId = null) {
     if (row.components.length) rows.push(row);
   }
   return rows;
+}
+
+async function buildButtonsForMatch(tournament, match) {
+  const teamName = await teamNameFactory(tournament);
+  const row = new ActionRowBuilder();
+  if (match.status === 'pending') {
+    if (match.team1_id) row.addComponents(new ButtonBuilder().setCustomId(`report:${match.id}:${match.team1_id}`).setLabel(`Report ${shortLabel(teamName(match.team1_id))}`).setStyle(ButtonStyle.Primary));
+    if (match.team2_id) row.addComponents(new ButtonBuilder().setCustomId(`report:${match.id}:${match.team2_id}`).setLabel(`Report ${shortLabel(teamName(match.team2_id))}`).setStyle(ButtonStyle.Primary));
+  }
+  if (match.status === 'reported') row.addComponents(new ButtonBuilder().setCustomId(`approve:${match.id}`).setLabel(`Approve #${match.id}`).setStyle(ButtonStyle.Success));
+  return row.components.length ? [row] : [];
 }
 async function sendToChannel(guild, channelId, payload) {
   if (!channelId) return null;
@@ -88,6 +96,14 @@ async function cleanupRegistrationRoles(interaction, tournament) {
     if (member) await member.roles.remove(tournament.registration_role_id).catch(() => null);
   }
 }
+
+async function removeRegistrationRoleFromPlayers(interaction, tournament, players) {
+  if (!tournament.registration_role_id) return;
+  for (const playerId of players || []) {
+    const member = await interaction.guild.members.fetch(playerId).catch(() => null);
+    if (member) await member.roles.remove(tournament.registration_role_id).catch(() => null);
+  }
+}
 async function maybeCreateMatchChannels(interaction, tournament) {
   if (!tournament.auto_match_channels || !tournament.match_category_id) return;
   const matches = (await repo.getMatches(tournament.id)).filter(m => !m.text_channel_id && m.status === 'pending');
@@ -112,37 +128,16 @@ async function maybeCreateMatchChannels(interaction, tournament) {
     }
     if (textChannel) {
       await repo.updateMatch(m.id, { text_channel_id: textChannel.id, voice_channel_id: voiceId });
-      await textChannel.send({ content: `**Match #${m.id}** (${m.bracket_group || 'winners'} bracket)\n**${teamName(m.team1_id)}** vs **${teamName(m.team2_id)}**\nReport the winner here with the buttons or use \`/reportwin match_id:${m.id}\`.`, components: await buildMatchButtons(tournament, m.id) });
+      await textChannel.send({ content: `**Match #${m.id}** (${m.bracket_group || 'winners'} bracket)\n**${teamName(m.team1_id)}** vs **${teamName(m.team2_id)}**\nReport the winner here with the buttons or use \`/reportwin match_id:${m.id}\`.`, components: await buildButtonsForMatch(tournament, await repo.getMatch(m.id)) });
     }
   }
 }
 async function archiveMatchChannel(interaction, tournament, match) {
-  const freshMatch = await repo.getMatch(match.id).catch(() => match) || match;
-  const delay = Math.max(0, Number(tournament.delete_delay_minutes || 0));
-  const deleteChannels = Boolean(tournament.auto_delete_match_channels);
-
-  async function finishTextChannel() {
-    if (!freshMatch.text_channel_id) return;
-    const ch = await interaction.guild.channels.fetch(freshMatch.text_channel_id).catch(() => null);
-    if (!ch) return;
-    await ch.send(`✅ Match #${freshMatch.id} finished. This match channel will ${deleteChannels ? (delay ? `be deleted in ${delay} minute(s).` : 'be deleted now.') : 'be archived.'}`).catch(() => null);
-    if (deleteChannels) {
-      setTimeout(() => ch.delete('Bracket Bot: match finished').catch(() => null), delay * 60 * 1000);
-    } else if (tournament.auto_archive) {
-      await ch.setName(`done-${ch.name}`.slice(0, 100)).catch(() => null);
-      await ch.permissionOverwrites.edit(interaction.guild.roles.everyone.id, { SendMessages: false }).catch(() => null);
-    }
+  if (!tournament.auto_archive) return;
+  if (match.text_channel_id) {
+    const ch = await interaction.guild.channels.fetch(match.text_channel_id).catch(() => null);
+    if (ch) await ch.setName(`done-${ch.name}`.slice(0, 100)).catch(() => null);
   }
-
-  async function finishVoiceChannel() {
-    if (!freshMatch.voice_channel_id) return;
-    const voice = await interaction.guild.channels.fetch(freshMatch.voice_channel_id).catch(() => null);
-    if (!voice) return;
-    setTimeout(() => voice.delete('Bracket Bot: match finished').catch(() => null), delay * 60 * 1000);
-  }
-
-  await finishTextChannel();
-  await finishVoiceChannel();
 }
 function normalizeWinnerInput(input) {
   const raw = String(input || '').trim();
@@ -261,9 +256,7 @@ client.on('interactionCreate', async interaction => {
         autoArchive: asBool(interaction.options.getBoolean('auto_archive')),
         requireCheckin: asBool(requireCheckin),
         registrationRoleId: registrationRole?.id || null,
-        cleanupRoles: asBool(interaction.options.getBoolean('cleanup_roles')),
-        autoDeleteMatchChannels: asBool(interaction.options.getBoolean('auto_delete_match_channels')),
-        deleteDelayMinutes: interaction.options.getInteger('delete_delay_minutes') || 0
+        cleanupRoles: asBool(interaction.options.getBoolean('cleanup_roles'))
       });
       await interaction.reply(`✅ Created **${name}** (#${t.id}) as **${teamSize}v${teamSize}** (${format}).\nSignup: ${signup}\nBracket: ${bracket}\nCheck-in required: **${requireCheckin ? 'Yes' : 'No'}**${requireCheckin && checkin ? ` in ${checkin}` : ''}\nStaff: ${staff}${registrationRole ? `\nRegistration role: ${registrationRole}` : ''}`);
       return sendToChannel(interaction.guild, bracket.id, { content: `🏆 **${name}** created.\nTournament ID: **${t.id}**\nRegister in ${signup} with \`/register\`. No team name needed — first player becomes the display name.` });
@@ -278,8 +271,7 @@ client.on('interactionCreate', async interaction => {
       }
       const users = [];
       for (let i = 1; i <= 4; i++) { const user = interaction.options.getUser(`player${i}`); if (user) users.push(user); }
-      const playerDetails = users.map(userToPlayer);
-      const players = playerDetails.map(u => u.id);
+      const players = users.map(u => u.id);
       if (players.length !== t.team_size) return interaction.reply(hidden(`❌ This tournament requires exactly ${t.team_size} player(s) per team.`));
       if (new Set(players).size !== players.length) return interaction.reply(hidden('❌ Same player cannot be used twice in one team.'));
       const existing = await repo.getTeams(t.id);
@@ -289,7 +281,7 @@ client.on('interactionCreate', async interaction => {
       let name = baseName;
       let n = 2;
       while (existing.some(tm => tm.name.toLowerCase() === name.toLowerCase())) name = `${baseName}-${n++}`;
-      const team = await repo.addTeam(t.id, name, playerDetails, !t.require_checkin);
+      const team = await repo.addTeam(t.id, name, players, !t.require_checkin);
       const roleResults = await assignRegistrationRole(interaction, t, players);
       await interaction.reply(`✅ Registered **${team.name}** for **${t.name}**: ${players.map(p => `<@${p}>`).join(' ')}${t.registration_role_id ? `\nRole: <@&${t.registration_role_id}> assigned.` : ''}`);
       if (roleResults.some(r => r.includes('failed'))) await interaction.followUp(hidden(`⚠️ Role notes: ${roleResults.join(', ')}`));
@@ -369,6 +361,25 @@ client.on('interactionCreate', async interaction => {
       await maybeCreateMatchChannels(interaction, latest);
       await interaction.reply(`✅ Force win set for match #${matchId}: **${winner.name}**.`);
       return postBracket(interaction, latest, `✅ Force win set for match #${matchId}.`);
+    }
+
+    if (cmd === 'unreg') {
+      const targetUser = interaction.options.getUser('user');
+      const tournamentId = interaction.options.getInteger('tournament_id');
+      const t = tournamentId ? await repo.getTournamentById(tournamentId) : await getTournamentFromContext(interaction, false);
+      if (!t || t.guild_id !== interaction.guildId) return interaction.reply(hidden('❌ No tournament found.'));
+      const staff = await isStaff(interaction, t);
+      const userId = targetUser?.id || interaction.user.id;
+      if (targetUser && !staff) return interaction.reply(hidden('❌ Staff only to unregister another user.'));
+      if (t.status !== 'registration' && !staff) return interaction.reply(hidden('❌ You can only unregister before the bracket starts. Ask staff if you need help.'));
+      const teams = await repo.getTeams(t.id);
+      const team = teams.find(tm => tm.players.includes(userId));
+      if (!team) return interaction.reply(hidden('❌ No registered team found for that user.'));
+      await repo.updateTeam(team.id, { active: 0 });
+      await removeRegistrationRoleFromPlayers(interaction, t, team.players);
+      await repo.log(interaction.guildId, t.id, 'TEAM_UNREGISTERED', `${team.name} removed by ${interaction.user.id}`);
+      await interaction.reply(`✅ Unregistered **${team.name}** from **${t.name}**.`);
+      return postBracket(interaction, t, `ℹ️ Team unregistered: **${team.name}**`);
     }
 
     if (cmd === 'teamlist') {

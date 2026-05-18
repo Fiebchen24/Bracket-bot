@@ -48,74 +48,128 @@ async function roundExists(tournamentId, group, round) { return (await repo.getG
 
 async function createNextRoundIfReady(tournament) {
   if (!tournament || tournament.status !== 'running') return;
-  if (tournament.format === 'single') {
-    const matches = await repo.getMatches(tournament.id);
-    const rounds = [...new Set(matches.filter(m => m.bracket_group === 'winners').map(m => m.round))].sort((a,b)=>a-b);
-    const round = rounds.at(-1) || 1;
-    if (await roundExists(tournament.id, 'winners', round + 1)) return;
-    const winners = await winnersOfRound(tournament.id, 'winners', round);
-    if (!winners) return;
-    if (winners.length <= 1) {
-      await repo.updateTournament(tournament.id, { status: 'finished', winner_team_id: winners[0] || null });
-      await repo.log(tournament.guild_id, tournament.id, 'TOURNAMENT_FINISHED', `Winner team id: ${winners[0] || 'none'}`);
-      return;
-    }
-    await createMatchesFromTeams(tournament.id, winners, round + 1, 'winners');
-    await repo.updateTournament(tournament.id, { current_round: round + 1 });
-    await repo.log(tournament.guild_id, tournament.id, 'NEXT_ROUND_CREATED', `Round ${round + 1}`);
-    await createNextRoundIfReady(await repo.getTournamentById(tournament.id));
-    return;
-  }
 
-  // Simple double elimination engine: creates WB, LB, Grand Final. Stable for small/medium events.
-  if (tournament.format === 'double') {
-    const matches = await repo.getMatches(tournament.id);
-    const groups = ['winners', 'losers'];
-    for (const group of groups) {
-      const groupMatches = matches.filter(m => m.bracket_group === group);
-      const rounds = [...new Set(groupMatches.map(m => m.round))].sort((a,b)=>a-b);
-      for (const round of rounds) {
-        const roundMatches = await repo.getGroupRoundMatches(tournament.id, group, round);
-        if (!roundMatches.length || !roundMatches.every(isDone)) continue;
-        const winners = roundMatches.map(m => m.winner_team_id).filter(Boolean);
-        if (group === 'winners') {
-          if (winners.length > 1 && !(await roundExists(tournament.id, 'winners', round + 1))) {
-            await createMatchesFromTeams(tournament.id, winners, round + 1, 'winners');
-            await repo.log(tournament.guild_id, tournament.id, 'WB_NEXT_CREATED', `Winner bracket round ${round + 1}`);
-          }
-          const losers = losersOfMatches(roundMatches);
-          if (losers.length && !(await roundExists(tournament.id, 'losers', round))) {
-            await createMatchesFromTeams(tournament.id, losers, round, 'losers');
-            await repo.log(tournament.guild_id, tournament.id, 'LB_CREATED', `Loser bracket round ${round}`);
-          }
-        } else if (group === 'losers') {
-          if (winners.length > 1 && !(await roundExists(tournament.id, 'losers', round + 1))) {
-            await createMatchesFromTeams(tournament.id, winners, round + 1, 'losers');
-            await repo.log(tournament.guild_id, tournament.id, 'LB_NEXT_CREATED', `Loser bracket round ${round + 1}`);
-          }
+  let changed = true;
+  let guard = 0;
+  while (changed && guard++ < 25) {
+    changed = false;
+
+    if (tournament.format === 'single') {
+      const matches = await repo.getMatches(tournament.id);
+      const rounds = [...new Set(matches.filter(m => m.bracket_group === 'winners').map(m => m.round))].sort((a,b)=>a-b);
+      const round = rounds.at(-1) || 1;
+      if (await roundExists(tournament.id, 'winners', round + 1)) return;
+      const winners = await winnersOfRound(tournament.id, 'winners', round);
+      if (!winners) return;
+      if (winners.length <= 1) {
+        await repo.updateTournament(tournament.id, { status: 'finished', winner_team_id: winners[0] || null });
+        await repo.log(tournament.guild_id, tournament.id, 'TOURNAMENT_FINISHED', `Winner team id: ${winners[0] || 'none'}`);
+        return;
+      }
+      await createMatchesFromTeams(tournament.id, winners, round + 1, 'winners');
+      await repo.updateTournament(tournament.id, { current_round: round + 1 });
+      await repo.log(tournament.guild_id, tournament.id, 'NEXT_ROUND_CREATED', `Round ${round + 1}`);
+      changed = true;
+      continue;
+    }
+
+    // Double elimination engine.
+    // LB mapping used here:
+    //   WB R1 losers -> LB R1
+    //   LB R1 winners + WB R2 losers -> LB R2
+    //   LB R2 winners -> LB R3
+    //   LB R3 winners + WB R3 losers -> LB R4
+    //   ... final WB loser joins final LB round before Grand Final.
+    const allMatches = await repo.getMatches(tournament.id);
+    const wbRounds = [...new Set(allMatches.filter(m => m.bracket_group === 'winners').map(m => m.round))].sort((a,b)=>a-b);
+    const lastWbRound = wbRounds.at(-1) || 1;
+
+    // Create next Winner Bracket round when current WB round is complete.
+    const lastWbMatches = await repo.getGroupRoundMatches(tournament.id, 'winners', lastWbRound);
+    if (lastWbMatches.length && lastWbMatches.every(isDone) && !(await roundExists(tournament.id, 'winners', lastWbRound + 1))) {
+      const wbWinners = lastWbMatches.map(m => m.winner_team_id).filter(Boolean);
+      if (wbWinners.length > 1) {
+        await createMatchesFromTeams(tournament.id, wbWinners, lastWbRound + 1, 'winners');
+        await repo.log(tournament.guild_id, tournament.id, 'WB_NEXT_CREATED', `Winner bracket round ${lastWbRound + 1}`);
+        changed = true;
+        continue;
+      }
+    }
+
+    // Create the next missing Loser Bracket round if prerequisites are complete.
+    const current = await repo.getMatches(tournament.id);
+    const currentWbRounds = [...new Set(current.filter(m => m.bracket_group === 'winners').map(m => m.round))].sort((a,b)=>a-b);
+    const possibleMaxLbRound = Math.max(1, (currentWbRounds.at(-1) || 1) * 2 - 2);
+    const existingLbRounds = new Set(current.filter(m => m.bracket_group === 'losers').map(m => m.round));
+
+    for (let lbRound = 1; lbRound <= possibleMaxLbRound; lbRound++) {
+      if (existingLbRounds.has(lbRound)) continue;
+      let entrants = [];
+      if (lbRound === 1) {
+        const wb1 = await repo.getGroupRoundMatches(tournament.id, 'winners', 1);
+        if (!wb1.length || !wb1.every(isDone)) break;
+        entrants = losersOfMatches(wb1);
+      } else if (lbRound % 2 === 0) {
+        const prev = await winnersOfRound(tournament.id, 'losers', lbRound - 1);
+        if (!prev) break;
+        const wbRound = lbRound / 2 + 1;
+        const wb = await repo.getGroupRoundMatches(tournament.id, 'winners', wbRound);
+        if (!wb.length || !wb.every(isDone)) break;
+        const drops = losersOfMatches(wb);
+        entrants = [];
+        const max = Math.max(prev.length, drops.length);
+        for (let i = 0; i < max; i++) {
+          if (prev[i]) entrants.push(prev[i]);
+          if (drops[i]) entrants.push(drops[i]);
         }
+      } else {
+        const prev = await winnersOfRound(tournament.id, 'losers', lbRound - 1);
+        if (!prev) break;
+        entrants = prev;
       }
+
+      if (entrants.length >= 1) {
+        if (entrants.length === 1) {
+          await repo.createMatch(tournament.id, lbRound, 1, entrants[0], null, 'bye', entrants[0], 'losers');
+        } else {
+          await createMatchesFromTeams(tournament.id, entrants, lbRound, 'losers');
+        }
+        await repo.log(tournament.guild_id, tournament.id, 'LB_ROUND_CREATED', `Loser bracket round ${lbRound}`);
+        changed = true;
+      }
+      break;
     }
-    const fresh = await repo.getMatches(tournament.id);
-    const wb = fresh.filter(m => m.bracket_group === 'winners');
-    const lb = fresh.filter(m => m.bracket_group === 'losers');
-    const wbDone = wb.length && wb.every(isDone);
-    const lbDone = lb.length && lb.every(isDone);
-    const grandExists = fresh.some(m => m.bracket_group === 'grand');
-    if (wbDone && lbDone && !grandExists) {
-      const wbWinner = wb.sort((a,b)=>b.round-a.round)[0]?.winner_team_id;
-      const lbWinner = lb.sort((a,b)=>b.round-a.round)[0]?.winner_team_id;
-      if (wbWinner && lbWinner && wbWinner !== lbWinner) {
-        await repo.createMatch(tournament.id, 1, 1, wbWinner, lbWinner, 'pending', null, 'grand');
+
+    // Create Grand Final only after WB champion and final LB champion exist.
+    const latest = await repo.getMatches(tournament.id);
+    const grandExists = latest.some(m => m.bracket_group === 'grand');
+    if (!grandExists) {
+      const wbLatestRound = Math.max(...latest.filter(m => m.bracket_group === 'winners').map(m => m.round));
+      const wbFinal = await repo.getGroupRoundMatches(tournament.id, 'winners', wbLatestRound);
+      const wbChampion = wbFinal.length && wbFinal.every(isDone) ? wbFinal.map(m => m.winner_team_id).filter(Boolean)[0] : null;
+      const expectedLastLbRound = Math.max(1, wbLatestRound * 2 - 2);
+      const lbFinal = await repo.getGroupRoundMatches(tournament.id, 'losers', expectedLastLbRound);
+      const lbChampion = lbFinal.length && lbFinal.every(isDone) ? lbFinal.map(m => m.winner_team_id).filter(Boolean)[0] : null;
+      if (wbChampion && lbChampion && wbChampion !== lbChampion) {
+        await repo.createMatch(tournament.id, 1, 1, wbChampion, lbChampion, 'pending', null, 'grand');
         await repo.log(tournament.guild_id, tournament.id, 'GRAND_FINAL_CREATED', 'Grand final created');
-      } else if (wbWinner) {
-        await repo.updateTournament(tournament.id, { status: 'finished', winner_team_id: wbWinner });
+        changed = true;
       }
     }
-    const grand = (await repo.getMatches(tournament.id)).find(m => m.bracket_group === 'grand');
+
+    const grandMatches = (await repo.getMatches(tournament.id)).filter(m => m.bracket_group === 'grand').sort((a,b)=>a.round-b.round);
+    const grand = grandMatches.at(-1);
     if (grand && isDone(grand)) {
-      await repo.updateTournament(tournament.id, { status: 'finished', winner_team_id: grand.winner_team_id });
-      await repo.log(tournament.guild_id, tournament.id, 'TOURNAMENT_FINISHED', `Winner team id: ${grand.winner_team_id}`);
+      // Basic reset final: if LB side wins first grand final, create a reset match.
+      const firstGrand = grandMatches[0];
+      if (grandMatches.length === 1 && grand.winner_team_id === firstGrand.team2_id) {
+        await repo.createMatch(tournament.id, 2, 1, firstGrand.team1_id, firstGrand.team2_id, 'pending', null, 'grand');
+        await repo.log(tournament.guild_id, tournament.id, 'GRAND_FINAL_RESET_CREATED', 'Reset final created');
+        changed = true;
+      } else {
+        await repo.updateTournament(tournament.id, { status: 'finished', winner_team_id: grand.winner_team_id });
+        await repo.log(tournament.guild_id, tournament.id, 'TOURNAMENT_FINISHED', `Winner team id: ${grand.winner_team_id}`);
+      }
     }
   }
 }

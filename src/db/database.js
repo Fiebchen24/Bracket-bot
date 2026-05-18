@@ -44,8 +44,6 @@ CREATE TABLE IF NOT EXISTS tournaments (
   require_checkin INTEGER DEFAULT 0,
   registration_role_id TEXT,
   cleanup_roles INTEGER DEFAULT 0,
-  auto_delete_match_channels INTEGER DEFAULT 0,
-  delete_delay_minutes INTEGER DEFAULT 0,
   winner_team_id INTEGER,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -78,9 +76,6 @@ CREATE TABLE IF NOT EXISTS matches (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
-
-ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS auto_delete_match_channels INTEGER DEFAULT 0;
-ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS delete_delay_minutes INTEGER DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS logs (
   id SERIAL PRIMARY KEY,
