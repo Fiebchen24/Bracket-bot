@@ -241,8 +241,26 @@ async function maybeFinishGrand(tournament) {
   return false;
 }
 
+async function maybeFinishRoundRobin(tournament) {
+  const matches = await repo.getMatches(tournament.id);
+  const rr = matches.filter(m => m.bracket_group === 'round_robin');
+  if (!rr.length) return false;
+  if (!rr.every(isDone)) return false;
+  const wins = new Map();
+  for (const m of rr) if (m.winner_team_id) wins.set(m.winner_team_id, (wins.get(m.winner_team_id) || 0) + 1);
+  const sorted = [...wins.entries()].sort((a,b)=>b[1]-a[1]);
+  await repo.updateTournament(tournament.id, { status: 'finished', winner_team_id: sorted[0]?.[0] || null });
+  await repo.log(tournament.guild_id, tournament.id, 'TOURNAMENT_FINISHED', `Round Robin finished. Winner team id: ${sorted[0]?.[0] || 'none'}`);
+  return true;
+}
+
 async function createNextRoundIfReady(tournament) {
   if (!tournament || tournament.status !== 'running') return;
+
+  if (tournament.format === 'round_robin') {
+    await maybeFinishRoundRobin(tournament);
+    return;
+  }
 
   let changed = true;
   let guard = 0;

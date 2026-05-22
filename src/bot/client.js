@@ -41,9 +41,19 @@ async function teamNameFactory(tournament) {
   const teams = await repo.getTeams(tournament.id);
   return id => id ? (teams.find(t => t.id === id)?.name || `Team ${id}`) : 'BYE';
 }
+function selectOpenMatchesForTournament(tournament, matches) {
+  const open = matches.filter(m => m.status === 'pending' || m.status === 'reported');
+  if (tournament?.format === 'round_robin') {
+    const pendingRounds = [...new Set(open.map(m => m.round))].sort((a,b)=>a-b);
+    const currentRound = pendingRounds[0];
+    return currentRound ? open.filter(m => m.round === currentRound) : [];
+  }
+  return open;
+}
+
 async function buildMatchButtons(tournament) {
   const teamName = await teamNameFactory(tournament);
-  const matches = (await repo.getMatches(tournament.id)).filter(m => m.status === 'pending' || m.status === 'reported').slice(0, 5);
+  const matches = selectOpenMatchesForTournament(tournament, await repo.getMatches(tournament.id)).slice(0, 5);
   const rows = [];
   for (const m of matches) {
     const row = new ActionRowBuilder();
@@ -110,10 +120,12 @@ async function maybeCreateMatchChannels(interaction, tournament, reason = 'sync'
   if (!tournament.auto_match_channels) return { created: 0, skipped: 'auto_match_channels disabled' };
   if (!tournament.match_category_id) return { created: 0, skipped: 'match_category_id missing' };
 
-  const matches = (await repo.getMatches(tournament.id))
+  const allMatches = await repo.getMatches(tournament.id);
+  const selectedOpen = selectOpenMatchesForTournament(tournament, allMatches);
+  const matches = selectedOpen
     .filter(m => !m.text_channel_id && (m.status === 'pending' || m.status === 'reported') && m.team1_id && m.team2_id);
 
-  if (!matches.length) return { created: 0, skipped: 'no open matches without channels' };
+  if (!matches.length) return { created: 0, skipped: tournament.format === 'round_robin' ? 'no open matches without channels in current round' : 'no open matches without channels' };
 
   const teams = await repo.getTeams(tournament.id);
   const teamName = id => teams.find(t => t.id === id)?.name || `team-${id}`;
