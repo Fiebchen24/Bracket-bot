@@ -1,6 +1,21 @@
 const { query, log } = require('./database');
 
-function parseTeam(t) { return t ? { ...t, players: JSON.parse(t.players_json || '[]') } : null; }
+
+function normalizePlayerEntry(p) {
+  if (!p) return null;
+  if (typeof p === 'string') return p;
+  if (typeof p === 'number') return String(p);
+  if (typeof p === 'object') return p.id || p.userId || p.discordId || p.user_id || null;
+  return String(p);
+}
+function parseTeam(t) {
+  if (!t) return null;
+  let rawPlayers = [];
+  try { rawPlayers = JSON.parse(t.players_json || '[]'); } catch { rawPlayers = []; }
+  const players = rawPlayers.map(normalizePlayerEntry).filter(Boolean);
+  return { ...t, players, player_details: rawPlayers };
+}
+
 function boolInt(v) { return v ? 1 : 0; }
 
 async function getSettings(guildId) {

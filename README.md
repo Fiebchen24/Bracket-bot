@@ -1,29 +1,25 @@
-# Bracket Bot Pro Dashboard v8.2
+# Bracket Bot Pro v8.5 Core Rebuild
 
-Shared PostgreSQL upgrade for Render.
-
-## Render services
+## Important Render setup
+Use the same GitHub repo for both services, but split modes:
 
 ### Background Worker
 - Build Command: `npm install`
 - Start Command: `npm start`
-- Env:
-  - `SERVICE_MODE=bot`
-  - `DISCORD_TOKEN`
-  - `CLIENT_ID`
-  - `DATABASE_URL`
+- Env: `SERVICE_MODE=bot`
 
 ### Web Service
 - Build Command: `npm install`
 - Start Command: `npm start`
-- Env:
-  - `SERVICE_MODE=web`
-  - `DISCORD_TOKEN`
-  - `CLIENT_ID`
-  - `CLIENT_SECRET` or `DISCORD_CLIENT_SECRET`
-  - `SESSION_SECRET`
-  - `BASE_URL=https://your-service.onrender.com`
-  - `DATABASE_URL`
+- Env: `SERVICE_MODE=web`
 
-## Important
-Create one Render PostgreSQL database and copy the same `DATABASE_URL` to BOTH services. The bot writes tournaments/teams/matches and the dashboard reads the same data.
+Both services need the same `DATABASE_URL` from Render PostgreSQL.
+
+## v8.5 fixes
+- Double elimination lower-bracket routing rebuilt
+- Winner final loser now drops into the lower final path instead of fake BYEs
+- Grand Final and reset final handling improved
+- Avoids fake one-player lower-bracket BYE chains
+- `[object Object]` player rendering fixed by normalizing player entries
+- `/unreg` retained
+- Match channels continue to be created for newly generated matches
