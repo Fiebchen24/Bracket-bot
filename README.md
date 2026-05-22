@@ -23,3 +23,10 @@ Both services need the same `DATABASE_URL` from Render PostgreSQL.
 - `[object Object]` player rendering fixed by normalizing player entries
 - `/unreg` retained
 - Match channels continue to be created for newly generated matches
+
+
+## v8.6
+- Channel automation sync after every approved/forced/DQ match.
+- `/syncchannels` repair command for staff.
+- Creates missing channels for open matches and cleans finished match channels when auto_archive is enabled.
+- Logs channel creation failures to the bracket channel.

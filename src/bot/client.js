@@ -16,7 +16,8 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBit
 function hidden(content) { return { content, flags: MessageFlags.Ephemeral }; }
 function shortLabel(text) { return String(text || 'Team').slice(0, 75); }
 function asBool(v) { return v ? 1 : 0; }
-function displayNameFromUser(user) { return user.globalName || user.username || user.displayName || `Player-${user.id}`; }
+function displayNameFromUser(user) { return user.globalName || user.displayName || user.username || `Player-${user.id}`; }
+function playerDetailFromUser(user) { return { id: user.id, displayName: displayNameFromUser(user), username: user.username || displayNameFromUser(user), avatarUrl: user.displayAvatarURL?.({ extension: 'png', size: 64 }) || null }; }
 function safeChannelPart(s) { return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 25) || 'team'; }
 
 async function isStaff(interaction, tournament = null) {
@@ -104,14 +105,26 @@ async function removeRegistrationRoleFromPlayers(interaction, tournament, player
     if (member) await member.roles.remove(tournament.registration_role_id).catch(() => null);
   }
 }
-async function maybeCreateMatchChannels(interaction, tournament) {
-  if (!tournament.auto_match_channels || !tournament.match_category_id) return;
-  const matches = (await repo.getMatches(tournament.id)).filter(m => !m.text_channel_id && m.status === 'pending');
+async function maybeCreateMatchChannels(interaction, tournament, reason = 'sync') {
+  if (!tournament) return { created: 0, skipped: 'no tournament' };
+  if (!tournament.auto_match_channels) return { created: 0, skipped: 'auto_match_channels disabled' };
+  if (!tournament.match_category_id) return { created: 0, skipped: 'match_category_id missing' };
+
+  const matches = (await repo.getMatches(tournament.id))
+    .filter(m => !m.text_channel_id && (m.status === 'pending' || m.status === 'reported') && m.team1_id && m.team2_id);
+
+  if (!matches.length) return { created: 0, skipped: 'no open matches without channels' };
+
   const teams = await repo.getTeams(tournament.id);
   const teamName = id => teams.find(t => t.id === id)?.name || `team-${id}`;
   const staffRoleId = tournament.staff_role_id;
   const category = await interaction.guild.channels.fetch(tournament.match_category_id).catch(() => null);
-  if (!category) return;
+  if (!category) {
+    await sendToChannel(interaction.guild, tournament.bracket_channel_id, { content: `⚠️ Could not create match channels for **${tournament.name}**: Match category not found.` });
+    return { created: 0, skipped: 'category not found' };
+  }
+
+  let created = 0;
   for (const m of matches) {
     const name = `match-${String(m.id).padStart(2,'0')}-${safeChannelPart(teamName(m.team1_id))}-vs-${safeChannelPart(teamName(m.team2_id))}`.slice(0, 95);
     const overwrites = [{ id: interaction.guild.roles.everyone.id, deny: [PermissionsBitField.Flags.ViewChannel] }];
@@ -120,25 +133,95 @@ async function maybeCreateMatchChannels(interaction, tournament) {
       if (tm) tm.players.forEach(pid => overwrites.push({ id: pid, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory] }));
     }
     if (staffRoleId) overwrites.push({ id: staffRoleId, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ManageChannels, PermissionsBitField.Flags.ReadMessageHistory] });
-    const textChannel = await interaction.guild.channels.create({ name, type: ChannelType.GuildText, parent: category.id, permissionOverwrites: overwrites }).catch(() => null);
+
+    let textChannel = null;
+    try {
+      textChannel = await interaction.guild.channels.create({ name, type: ChannelType.GuildText, parent: category.id, permissionOverwrites: overwrites });
+    } catch (err) {
+      await repo.log(tournament.guild_id, tournament.id, 'MATCH_CHANNEL_CREATE_FAILED', `Match ${m.id}: ${err.message}`);
+      await sendToChannel(interaction.guild, tournament.bracket_channel_id, { content: `⚠️ Could not create channel for match #${m.id}: ${err.message}` });
+      continue;
+    }
+
     let voiceId = null;
     if (tournament.auto_voice) {
-      const voice = await interaction.guild.channels.create({ name: `Voice Match ${m.id}`, type: ChannelType.GuildVoice, parent: category.id, permissionOverwrites: overwrites }).catch(() => null);
+      const voice = await interaction.guild.channels.create({ name: `Voice Match ${m.id}`, type: ChannelType.GuildVoice, parent: category.id, permissionOverwrites: overwrites }).catch(async err => {
+        await repo.log(tournament.guild_id, tournament.id, 'MATCH_VOICE_CREATE_FAILED', `Match ${m.id}: ${err.message}`);
+        return null;
+      });
       voiceId = voice?.id || null;
     }
-    if (textChannel) {
-      await repo.updateMatch(m.id, { text_channel_id: textChannel.id, voice_channel_id: voiceId });
-      await textChannel.send({ content: `**Match #${m.id}** (${m.bracket_group || 'winners'} bracket)\n**${teamName(m.team1_id)}** vs **${teamName(m.team2_id)}**\nReport the winner here with the buttons or use \`/reportwin match_id:${m.id}\`.`, components: await buildButtonsForMatch(tournament, await repo.getMatch(m.id)) });
+
+    await repo.updateMatch(m.id, { text_channel_id: textChannel.id, voice_channel_id: voiceId });
+    const freshMatch = await repo.getMatch(m.id);
+    await textChannel.send({
+      content: `🏆 **Match #${m.id}** (${m.bracket_group || 'winners'} bracket)\n**${teamName(m.team1_id)}** vs **${teamName(m.team2_id)}**\nReport the winner here with the buttons or use \`/reportwin match_id:${m.id}\`.`,
+      components: await buildButtonsForMatch(tournament, freshMatch)
+    }).catch(() => null);
+    await repo.log(tournament.guild_id, tournament.id, 'MATCH_CHANNEL_CREATED', `Match ${m.id} via ${reason}: #${textChannel.name}`);
+    created++;
+  }
+  if (created) {
+    await sendToChannel(interaction.guild, tournament.bracket_channel_id, { content: `✅ Created **${created}** match channel${created === 1 ? '' : 's'} for **${tournament.name}**.` });
+  }
+  return { created };
+}
+
+async function cleanupFinishedMatchChannels(interaction, tournament) {
+  if (!tournament?.auto_archive) return { cleaned: 0 };
+  const matches = (await repo.getMatches(tournament.id)).filter(m => (m.status === 'approved' || m.status === 'bye') && (m.text_channel_id || m.voice_channel_id));
+  let cleaned = 0;
+  for (const match of matches) {
+    if (match.voice_channel_id) {
+      const v = await interaction.guild.channels.fetch(match.voice_channel_id).catch(() => null);
+      if (v) await v.delete(`Match #${match.id} finished`).catch(async err => {
+        await repo.log(tournament.guild_id, tournament.id, 'MATCH_VOICE_DELETE_FAILED', `Match ${match.id}: ${err.message}`);
+      });
+    }
+    if (match.text_channel_id) {
+      const ch = await interaction.guild.channels.fetch(match.text_channel_id).catch(() => null);
+      if (ch) {
+        await ch.delete(`Match #${match.id} finished`).catch(async err => {
+          // If deletion fails, fall back to a single done- prefix, never done-done-done.
+          await ch.setName(ch.name.startsWith('done-') ? ch.name : `done-${ch.name}`.slice(0, 100)).catch(() => null);
+          await repo.log(tournament.guild_id, tournament.id, 'MATCH_CHANNEL_DELETE_FAILED', `Match ${match.id}: ${err.message}`);
+        });
+      }
+    }
+    await repo.updateMatch(match.id, { text_channel_id: null, voice_channel_id: null });
+    cleaned++;
+  }
+
+  // Clean older leftovers from previous versions inside this event category.
+  if (tournament.match_category_id) {
+    const category = await interaction.guild.channels.fetch(tournament.match_category_id).catch(() => null);
+    if (category) {
+      const children = interaction.guild.channels.cache.filter(ch => ch.parentId === category.id);
+      for (const ch of children.values()) {
+        if (ch.name?.startsWith('done-')) {
+          await ch.delete('Cleaning archived match channel leftovers').catch(() => null);
+          cleaned++;
+        }
+      }
     }
   }
+
+  if (cleaned) await repo.log(tournament.guild_id, tournament.id, 'MATCH_CHANNELS_CLEANED', `${cleaned} finished/archived channel set(s) cleaned`);
+  return { cleaned };
+}
+
+async function syncTournamentChannels(interaction, tournament, reason = 'manual') {
+  const cleanup = await cleanupFinishedMatchChannels(interaction, tournament);
+  const latest = await repo.getTournamentById(tournament.id);
+  const create = await maybeCreateMatchChannels(interaction, latest, reason);
+  return { cleanup, create };
 }
 async function archiveMatchChannel(interaction, tournament, match) {
-  if (!tournament.auto_archive) return;
-  if (match.text_channel_id) {
-    const ch = await interaction.guild.channels.fetch(match.text_channel_id).catch(() => null);
-    if (ch) await ch.setName(`done-${ch.name}`.slice(0, 100)).catch(() => null);
-  }
+  // v8.7: channel cleanup is centralized in syncTournamentChannels() to prevent
+  // missing channels and repeated done-done-done prefixes.
+  return;
 }
+
 function normalizeWinnerInput(input) {
   const raw = String(input || '').trim();
   return { raw, lower: raw.toLowerCase(), userId: raw.match(/^<@!?(\d+)>$/)?.[1] || raw.match(/^\d{15,25}$/)?.[0] || null };
@@ -174,7 +257,7 @@ async function approveMatch(interaction, tournament, matchId) {
   await archiveMatchChannel(interaction, tournament, match);
   await engine.createNextRoundIfReady(await repo.getTournamentById(tournament.id));
   const latest = await repo.getTournamentById(tournament.id);
-  await maybeCreateMatchChannels(interaction, latest);
+  await syncTournamentChannels(interaction, latest, `approve match ${matchId}`);
   await postBracket(interaction, latest, `✅ Match #${matchId} approved.`);
   return latest;
 }
@@ -272,6 +355,7 @@ client.on('interactionCreate', async interaction => {
       const users = [];
       for (let i = 1; i <= 4; i++) { const user = interaction.options.getUser(`player${i}`); if (user) users.push(user); }
       const players = users.map(u => u.id);
+      const playerDetails = users.map(playerDetailFromUser);
       if (players.length !== t.team_size) return interaction.reply(hidden(`❌ This tournament requires exactly ${t.team_size} player(s) per team.`));
       if (new Set(players).size !== players.length) return interaction.reply(hidden('❌ Same player cannot be used twice in one team.'));
       const existing = await repo.getTeams(t.id);
@@ -281,7 +365,7 @@ client.on('interactionCreate', async interaction => {
       let name = baseName;
       let n = 2;
       while (existing.some(tm => tm.name.toLowerCase() === name.toLowerCase())) name = `${baseName}-${n++}`;
-      const team = await repo.addTeam(t.id, name, players, !t.require_checkin);
+      const team = await repo.addTeam(t.id, name, playerDetails, !t.require_checkin);
       const roleResults = await assignRegistrationRole(interaction, t, players);
       await interaction.reply(`✅ Registered **${team.name}** for **${t.name}**: ${players.map(p => `<@${p}>`).join(' ')}${t.registration_role_id ? `\nRole: <@&${t.registration_role_id}> assigned.` : ''}`);
       if (roleResults.some(r => r.includes('failed'))) await interaction.followUp(hidden(`⚠️ Role notes: ${roleResults.join(', ')}`));
@@ -309,7 +393,7 @@ client.on('interactionCreate', async interaction => {
       }
       await engine.startBracket(t);
       t = await repo.getTournamentById(t.id);
-      await maybeCreateMatchChannels(interaction, t);
+      await syncTournamentChannels(interaction, t, 'start bracket');
       await interaction.reply(`✅ Bracket **${t.name}** started.`);
       return postBracket(interaction, t);
     }
@@ -358,7 +442,7 @@ client.on('interactionCreate', async interaction => {
       await archiveMatchChannel(interaction, t, match);
       await engine.createNextRoundIfReady(await repo.getTournamentById(t.id));
       const latest = await repo.getTournamentById(t.id);
-      await maybeCreateMatchChannels(interaction, latest);
+      await syncTournamentChannels(interaction, latest, `force match ${matchId}`);
       await interaction.reply(`✅ Force win set for match #${matchId}: **${winner.name}**.`);
       return postBracket(interaction, latest, `✅ Force win set for match #${matchId}.`);
     }
@@ -424,9 +508,21 @@ client.on('interactionCreate', async interaction => {
       await archiveMatchChannel(interaction, t, match);
       await engine.createNextRoundIfReady(await repo.getTournamentById(t.id));
       const latest = await repo.getTournamentById(t.id);
-      await maybeCreateMatchChannels(interaction, latest);
+      await syncTournamentChannels(interaction, latest, `dq match ${matchId}`);
       await interaction.reply('✅ DQ recorded. Opponent advances.');
       return postBracket(interaction, latest, `✅ DQ recorded for match #${matchId}.`);
+    }
+
+
+    if (cmd === 'syncchannels') {
+      const id = interaction.options.getInteger('tournament_id');
+      const t = id ? await repo.getTournamentById(id) : await getTournamentFromContext(interaction, false);
+      if (!t || t.guild_id !== interaction.guildId) return interaction.reply(hidden('❌ No tournament found.'));
+      await assertStaff(interaction, t);
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const result = await syncTournamentChannels(interaction, t, 'manual sync');
+      return interaction.editReply(`✅ Channel sync done. Created: **${result.create.created || 0}**. Cleaned: **${result.cleanup.cleaned || 0}**.${result.create.skipped ? `
+Note: ${result.create.skipped}` : ''}`);
     }
 
     if (cmd === 'resetbracket') {

@@ -10,6 +10,13 @@
   <h1>Bracket Events Admin</h1>
   <p>Guild ID: <code><%= guildId %></code></p>
 
+  <% function playerLabel(p){ if(!p) return ''; if(typeof p === 'string') return p; return p.displayName || p.username || p.id || ''; } %>
+  <% function playerAvatar(p){ if(!p || typeof p === 'string') return null; return p.avatarUrl || null; } %>
+  <% function teamPlayers(team){ return team && team.player_details && team.player_details.length ? team.player_details : (team && team.players ? team.players.map(id=>({id,displayName:id,username:id,avatarUrl:null})) : []); } %>
+  <% function teamAvatar(team){ const first = teamPlayers(team)[0]; return playerAvatar(first); } %>
+  <% function teamSub(team){ return teamPlayers(team).map(playerLabel).join(' · '); } %>
+  <% function matchStatus(match){ if(match.status === 'approved') return 'FINISHED'; if(match.status === 'reported') return 'REPORTED'; if(match.status === 'bye') return 'BYE'; return 'LIVE'; } %>
+
   <section class="panel">
     <h2>Active Tournaments</h2>
     <% if(tournaments && tournaments.length){ %>
@@ -43,14 +50,21 @@
       <div class="panel">
         <h2>Teams</h2>
         <% if(data.teams.length){ %>
-          <% data.teams.forEach(team=>{ %>
-            <div class="team-card">
-              <form method="post" action="/guild/<%= guildId %>/edit-team" class="inline-form">
-                <input type="hidden" name="team_id" value="<%= team.id %>">
-                <input name="name" value="<%= team.name %>">
-                <button>Save</button>
-              </form>
-              <div class="muted"><%= team.players.map(p => '@'+p).join(' · ') %></div>
+          <% data.teams.forEach(team=>{ const players = teamPlayers(team); %>
+            <div class="team-card pretty-team">
+              <div class="team-head">
+                <% if(teamAvatar(team)){ %><img class="avatar" src="<%= teamAvatar(team) %>" alt=""><% } else { %><span class="avatar fallback"><%= team.name.slice(0,1).toUpperCase() %></span><% } %>
+                <form method="post" action="/guild/<%= guildId %>/edit-team" class="inline-form team-edit">
+                  <input type="hidden" name="team_id" value="<%= team.id %>">
+                  <input name="name" value="<%= team.name %>">
+                  <button>Save</button>
+                </form>
+              </div>
+              <div class="player-list">
+                <% players.forEach(p=>{ %>
+                  <span class="player-chip"><% if(playerAvatar(p)){ %><img src="<%= playerAvatar(p) %>" alt=""><% } %><%= playerLabel(p) %></span>
+                <% }) %>
+              </div>
               <div><%= team.checked_in ? '✅ Checked in' : tournament.require_checkin ? '⏳ Not checked in' : '➖ Check-in off' %></div>
               <% if(tournament.status === 'registration'){ %>
               <form method="post" action="/guild/<%= guildId %>/remove-team"><input type="hidden" name="team_id" value="<%= team.id %>"><button class="danger small">Remove</button></form>
@@ -69,33 +83,44 @@
       </div>
     </section>
 
-    <section class="panel">
+    <section class="panel bracket-panel">
       <h2>Graphic Bracket Tree</h2>
       <% const groups = ['winners','losers','grand']; const labels = {winners:'Winner Bracket', losers:'Loser Bracket', grand:'Grand Final'}; %>
       <% groups.forEach(group=>{ const gm = data.matches.filter(m => (m.bracket_group || 'winners') === group); if(!gm.length) return; const rounds = [...new Set(gm.map(m=>m.round))].sort((a,b)=>a-b); %>
-        <h3><%= labels[group] %></h3>
-        <div class="bracket-scroll">
-          <div class="bracket-tree">
-            <% rounds.forEach(round=>{ const rm = gm.filter(m=>m.round===round); %>
-              <div class="round-column">
-                <div class="round-title">Round <%= round %></div>
-                <% rm.forEach(match=>{ %>
-                  <div class="match-box <%= match.status %>">
-                    <div class="match-id">#<%= match.id %> · M<%= match.match_number %></div>
-                    <div class="slot <%= match.winner_team_id === match.team1_id ? 'winner' : '' %>"><span><%= match.team1 ? match.team1.name : 'BYE' %></span><small><%= match.team1 ? match.team1.players.map(p=>'@'+p).join(', ') : '' %></small></div>
-                    <div class="slot <%= match.winner_team_id === match.team2_id ? 'winner' : '' %>"><span><%= match.team2 ? match.team2.name : 'BYE' %></span><small><%= match.team2 ? match.team2.players.map(p=>'@'+p).join(', ') : '' %></small></div>
-                    <div class="status"><%= match.status %><% if(match.reportedWinner){ %> · reported: <%= match.reportedWinner.name %><% } %></div>
-                    <% if(match.status !== 'approved' && match.status !== 'bye' && match.team1 && match.team2){ %>
-                    <form method="post" action="/guild/<%= guildId %>/force" class="mini-actions">
-                      <input type="hidden" name="match_id" value="<%= match.id %>">
-                      <button name="winner_team_id" value="<%= match.team1.id %>">Win <%= match.team1.name %></button>
-                      <button name="winner_team_id" value="<%= match.team2.id %>">Win <%= match.team2.name %></button>
-                    </form>
-                    <% } %>
-                  </div>
-                <% }) %>
-              </div>
-            <% }) %>
+        <div class="bracket-section <%= group %>">
+          <h3><%= labels[group] %></h3>
+          <div class="bracket-scroll">
+            <div class="bracket-tree">
+              <% rounds.forEach(round=>{ const rm = gm.filter(m=>m.round===round); %>
+                <div class="round-column">
+                  <div class="round-title">Round <%= round %></div>
+                  <% rm.forEach(match=>{ %>
+                    <div class="match-box <%= match.status %>">
+                      <div class="match-top"><span class="match-id">#<%= match.id %> · M<%= match.match_number %></span><span class="badge <%= match.status %>"><%= matchStatus(match) %></span></div>
+                      <% [match.team1, match.team2].forEach((tm, idx)=>{ const isWinner = tm && match.winner_team_id === tm.id; const av = tm ? teamAvatar(tm) : null; %>
+                        <div class="slot <%= isWinner ? 'winner' : '' %> <%= tm ? '' : 'bye-slot' %>">
+                          <% if(tm){ %>
+                            <% if(av){ %><img class="avatar sm" src="<%= av %>" alt=""><% } else { %><span class="avatar sm fallback"><%= tm.name.slice(0,1).toUpperCase() %></span><% } %>
+                            <div class="team-text"><span><%= tm.name %></span><small><%= teamSub(tm) %></small></div>
+                            <% if(isWinner){ %><b class="win-tag">WIN</b><% } %>
+                          <% } else { %>
+                            <div class="bye-label">BYE</div>
+                          <% } %>
+                        </div>
+                      <% }) %>
+                      <div class="status-line"><% if(match.reportedWinner){ %><span class="reported-chip">Reported: <%= match.reportedWinner.name %></span><% } else { %><span class="muted">Waiting</span><% } %></div>
+                      <% if(match.status !== 'approved' && match.status !== 'bye' && match.team1 && match.team2){ %>
+                      <form method="post" action="/guild/<%= guildId %>/force" class="mini-actions">
+                        <input type="hidden" name="match_id" value="<%= match.id %>">
+                        <button name="winner_team_id" value="<%= match.team1.id %>">Win <%= match.team1.name %></button>
+                        <button name="winner_team_id" value="<%= match.team2.id %>">Win <%= match.team2.name %></button>
+                      </form>
+                      <% } %>
+                    </div>
+                  <% }) %>
+                </div>
+              <% }) %>
+            </div>
           </div>
         </div>
       <% }) %>

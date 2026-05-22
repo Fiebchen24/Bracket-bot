@@ -5,15 +5,29 @@ function normalizePlayerEntry(p) {
   if (!p) return null;
   if (typeof p === 'string') return p;
   if (typeof p === 'number') return String(p);
-  if (typeof p === 'object') return p.id || p.userId || p.discordId || p.user_id || null;
+  if (typeof p === 'object') return String(p.id || p.userId || p.discordId || p.user_id || '').trim() || null;
   return String(p);
+}
+function normalizePlayerDetail(p) {
+  const id = normalizePlayerEntry(p);
+  if (!id) return null;
+  if (typeof p === 'object' && p) {
+    return {
+      id,
+      displayName: p.displayName || p.globalName || p.username || p.name || id,
+      username: p.username || p.name || p.displayName || id,
+      avatarUrl: p.avatarUrl || p.avatarURL || p.avatar_url || null
+    };
+  }
+  return { id, displayName: id, username: id, avatarUrl: null };
 }
 function parseTeam(t) {
   if (!t) return null;
   let rawPlayers = [];
   try { rawPlayers = JSON.parse(t.players_json || '[]'); } catch { rawPlayers = []; }
-  const players = rawPlayers.map(normalizePlayerEntry).filter(Boolean);
-  return { ...t, players, player_details: rawPlayers };
+  const playerDetails = rawPlayers.map(normalizePlayerDetail).filter(Boolean);
+  const players = playerDetails.map(p => p.id);
+  return { ...t, players, player_details: playerDetails };
 }
 
 function boolInt(v) { return v ? 1 : 0; }

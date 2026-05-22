@@ -72,6 +72,12 @@ module.exports = [
     .addStringOption(o => o.setName('team').setDescription('Team display name or mention a player').setRequired(true))
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
+
+
+  new SlashCommandBuilder().setName('syncchannels').setDescription('Staff: create missing match channels and clean finished ones')
+    .addIntegerOption(o => o.setName('tournament_id').setDescription('Optional tournament ID').setRequired(false))
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+
   new SlashCommandBuilder().setName('resetbracket').setDescription('End/reset a tournament').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
     .addIntegerOption(o => o.setName('tournament_id').setDescription('Optional tournament ID').setRequired(false))
 ].map(c => c.toJSON());
