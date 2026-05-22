@@ -7,8 +7,8 @@
 <body>
 <main class="card wide">
   <a href="/dashboard">← Back</a>
-  <h1>Bracket Events Admin</h1>
-  <p>Guild ID: <code><%= guildId %></code></p>
+  <h1>Bracket Events</h1>
+  <p>Guild ID: <code><%= guildId %></code> · <b><%= access && access.canAdmin ? "Host/Admin view" : (access && access.hasRegistrationRole ? "Player view" : "No tournament access") %></b></p>
 
   <% function playerLabel(p){ if(!p) return ''; if(typeof p === 'string') return p; return p.displayName || p.username || p.id || ''; } %>
   <% function playerAvatar(p){ if(!p || typeof p === 'string') return null; return p.avatarUrl || null; } %>
@@ -38,12 +38,14 @@
         <p>Signup <code><%= tournament.signup_channel_id %></code> · Bracket <code><%= tournament.bracket_channel_id %></code> · Check-in <b><%= tournament.require_checkin ? 'required' : 'off' %></b></p>
         <% if(tournament.registration_role_id){ %><p>Registration role: <code><%= tournament.registration_role_id %></code></p><% } %>
       </div>
+      <% if(access && access.canAdmin){ %>
       <div class="actions">
         <% if(tournament.status === 'registration'){ %>
         <form method="post" action="/guild/<%= guildId %>/start"><input type="hidden" name="tournament_id" value="<%= tournament.id %>"><button class="btn">Start Bracket</button></form>
         <% } %>
         <form method="post" action="/guild/<%= guildId %>/reset"><input type="hidden" name="tournament_id" value="<%= tournament.id %>"><button class="danger">End Tournament</button></form>
       </div>
+      <% } %>
     </section>
 
     <section class="grid2">
@@ -54,11 +56,15 @@
             <div class="team-card pretty-team">
               <div class="team-head">
                 <% if(teamAvatar(team)){ %><img class="avatar" src="<%= teamAvatar(team) %>" alt=""><% } else { %><span class="avatar fallback"><%= team.name.slice(0,1).toUpperCase() %></span><% } %>
-                <form method="post" action="/guild/<%= guildId %>/edit-team" class="inline-form team-edit">
-                  <input type="hidden" name="team_id" value="<%= team.id %>">
-                  <input name="name" value="<%= team.name %>">
-                  <button>Save</button>
-                </form>
+                <% if(access && access.canAdmin){ %>
+                  <form method="post" action="/guild/<%= guildId %>/edit-team" class="inline-form team-edit">
+                    <input type="hidden" name="team_id" value="<%= team.id %>">
+                    <input name="name" value="<%= team.name %>">
+                    <button>Save</button>
+                  </form>
+                <% } else { %>
+                  <div class="team-title"><b><%= team.name %></b></div>
+                <% } %>
               </div>
               <div class="player-list">
                 <% players.forEach(p=>{ %>
@@ -66,7 +72,7 @@
                 <% }) %>
               </div>
               <div><%= team.checked_in ? '✅ Checked in' : tournament.require_checkin ? '⏳ Not checked in' : '➖ Check-in off' %></div>
-              <% if(tournament.status === 'registration'){ %>
+              <% if(access && access.canAdmin && tournament.status === 'registration'){ %>
               <form method="post" action="/guild/<%= guildId %>/remove-team"><input type="hidden" name="team_id" value="<%= team.id %>"><button class="danger small">Remove</button></form>
               <% } %>
             </div>
@@ -74,6 +80,7 @@
         <% } else { %><p>No teams yet.</p><% } %>
       </div>
 
+      <% if(access && access.canAdmin){ %>
       <div class="panel">
         <h2>Admin Controls</h2>
         <form method="post" action="/guild/<%= guildId %>/approve" class="stacked"><label>Approve reported match ID</label><input name="match_id" placeholder="Match ID"><button>Approve</button></form>
@@ -81,6 +88,12 @@
         <h3>Logs</h3>
         <div class="logs"><% logs.forEach(l=>{ %><div><b><%= l.action %></b> · <%= l.details %></div><% }) %></div>
       </div>
+      <% } else { %>
+      <div class="panel">
+        <h2>Viewer Access</h2>
+        <p>You can view the live bracket and team list because you have the tournament registration role. Admin controls are hidden for players.</p>
+      </div>
+      <% } %>
     </section>
 
     <section class="panel bracket-panel">
@@ -109,7 +122,7 @@
                         </div>
                       <% }) %>
                       <div class="status-line"><% if(match.reportedWinner){ %><span class="reported-chip">Reported: <%= match.reportedWinner.name %></span><% } else { %><span class="muted">Waiting</span><% } %></div>
-                      <% if(match.status !== 'approved' && match.status !== 'bye' && match.team1 && match.team2){ %>
+                      <% if(access && access.canAdmin && match.status !== 'approved' && match.status !== 'bye' && match.team1 && match.team2){ %>
                       <form method="post" action="/guild/<%= guildId %>/force" class="mini-actions">
                         <input type="hidden" name="match_id" value="<%= match.id %>">
                         <button name="winner_team_id" value="<%= match.team1.id %>">Win <%= match.team1.name %></button>

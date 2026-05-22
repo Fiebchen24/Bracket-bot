@@ -391,10 +391,11 @@ client.on('interactionCreate', async interaction => {
         const notChecked = (await repo.getTeams(t.id)).filter(tm => !tm.checked_in);
         if (notChecked.length) return interaction.reply(hidden(`❌ Some teams are not checked in: ${notChecked.map(x => x.name).join(', ')}`));
       }
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       await engine.startBracket(t);
       t = await repo.getTournamentById(t.id);
-      await syncTournamentChannels(interaction, t, 'start bracket');
-      await interaction.reply(`✅ Bracket **${t.name}** started.`);
+      const syncResult = await syncTournamentChannels(interaction, t, 'start bracket');
+      await interaction.editReply(`✅ Bracket **${t.name}** started. Created match channels: **${syncResult.create.created || 0}**. Cleaned: **${syncResult.cleanup.cleaned || 0}**.`);
       return postBracket(interaction, t);
     }
 
@@ -425,8 +426,9 @@ client.on('interactionCreate', async interaction => {
       const t = match ? await repo.getTournamentById(match.tournament_id) : null;
       if (!t || t.guild_id !== interaction.guildId) return interaction.reply(hidden('❌ Match not found.'));
       await assertStaff(interaction, t);
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       await approveMatch(interaction, t, matchId);
-      return interaction.reply(`✅ Approved match #${matchId}.`);
+      return interaction.editReply(`✅ Approved match #${matchId}.`);
     }
 
     if (cmd === 'forcematchwin') {
@@ -438,12 +440,13 @@ client.on('interactionCreate', async interaction => {
       await assertStaff(interaction, t);
       const { winner, matchTeams } = await findWinnerInMatch(t.id, match, winnerInput);
       if (!winner) return interaction.reply(hidden(`❌ Winner not found in match #${matchId}. Teams: ${matchTeams.map(tm => tm.name).join(' vs ')}`));
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       await repo.updateMatch(matchId, { reported_winner_id: winner.id, winner_team_id: winner.id, status: 'approved' });
       await archiveMatchChannel(interaction, t, match);
       await engine.createNextRoundIfReady(await repo.getTournamentById(t.id));
       const latest = await repo.getTournamentById(t.id);
       await syncTournamentChannels(interaction, latest, `force match ${matchId}`);
-      await interaction.reply(`✅ Force win set for match #${matchId}: **${winner.name}**.`);
+      await interaction.editReply(`✅ Force win set for match #${matchId}: **${winner.name}**.`);
       return postBracket(interaction, latest, `✅ Force win set for match #${matchId}.`);
     }
 

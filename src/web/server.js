@@ -38,13 +38,93 @@ function requireDiscordAuthConfigured(req, res, next) {
   if (discordAuthReady) return next();
   return res.status(500).send('Discord login is not configured. Please set CLIENT_ID, CLIENT_SECRET or DISCORD_CLIENT_SECRET, BASE_URL and SESSION_SECRET in Render.');
 }
+function userGuild(req, guildId) {
+  return (req.user?.guilds || []).find(g => g.id === guildId) || null;
+}
 function userCanManageGuild(req, guildId) {
-  const guild = (req.user.guilds || []).find(g => g.id === guildId);
+  const guild = userGuild(req, guildId);
   if (!guild) return false;
   const perms = BigInt(guild.permissions || 0);
-  return Boolean((perms & BigInt(0x20)) || (perms & BigInt(0x8)));
+  return Boolean((perms & BigInt(0x20)) || (perms & BigInt(0x8))); // MANAGE_GUILD or ADMINISTRATOR
 }
-function ensureGuildAdmin(req, res, next) { if (userCanManageGuild(req, req.params.guildId)) return next(); return res.status(403).send('Not allowed for this server.'); }
+async function getMemberRoles(guildId, userId) {
+  if (!config.token) return [];
+  try {
+    const response = await fetch(`https://discord.com/api/v10/guilds/${guildId}/members/${userId}`, {
+      headers: { Authorization: `Bot ${config.token}` }
+    });
+    if (!response.ok) return [];
+    const member = await response.json();
+    return Array.isArray(member.roles) ? member.roles : [];
+  } catch (err) {
+    console.warn('Dashboard role lookup failed:', err.message);
+    return [];
+  }
+}
+async function getDashboardAccess(req, guildId, tournament = null, settings = null) {
+  const inGuild = Boolean(userGuild(req, guildId));
+  const canManageGuild = userCanManageGuild(req, guildId);
+  let roles = [];
+  if (inGuild) roles = await getMemberRoles(guildId, req.user.id);
+
+  const staffRoleId = tournament?.staff_role_id || settings?.staff_role_id || null;
+  const registrationRoleId = tournament?.registration_role_id || null;
+
+  const hasStaffRole = Boolean(staffRoleId && roles.includes(staffRoleId));
+  const hasRegistrationRole = Boolean(registrationRoleId && roles.includes(registrationRoleId));
+
+  let isRegisteredPlayer = false;
+  if (tournament) {
+    const teams = await repo.getTeams(tournament.id);
+    isRegisteredPlayer = teams.some(team => Array.isArray(team.players) && team.players.includes(req.user.id));
+  }
+
+  const canAdmin = inGuild && (canManageGuild || hasStaffRole);
+
+  // Player view is controlled by the tournament registration role.
+  // If an old tournament has no registration role configured, fall back to direct team membership.
+  const canPlayerView = inGuild && (hasRegistrationRole || (!registrationRoleId && isRegisteredPlayer));
+  const canView = Boolean(canAdmin || canPlayerView);
+
+  return {
+    inGuild,
+    roles,
+    staffRoleId,
+    registrationRoleId,
+    hasStaffRole,
+    hasRegistrationRole,
+    isPlayer: hasRegistrationRole || isRegisteredPlayer,
+    isRegisteredPlayer,
+    canManageGuild,
+    canView,
+    canAdmin,
+    accessMode: canAdmin ? 'admin' : canPlayerView ? 'player' : 'denied'
+  };
+}
+async function ensureGuildMember(req, res, next) {
+  if (userGuild(req, req.params.guildId)) return next();
+  return res.status(403).send('You must be a member of this Discord server to view this dashboard.');
+}
+async function ensureGuildDashboardAdmin(req, res, next) {
+  try {
+    const guildId = req.params.guildId;
+    const tournamentId = Number(req.body.tournament_id || req.query.tournament_id || 0);
+    let tournament = tournamentId ? await repo.getTournamentById(tournamentId) : null;
+    if (!tournament && req.body.match_id) {
+      const match = await repo.getMatch(Number(req.body.match_id));
+      tournament = match ? await repo.getTournamentById(match.tournament_id) : null;
+    }
+    if (!tournament && req.body.team_id) {
+      const team = await repo.getTeam(Number(req.body.team_id));
+      tournament = team ? await repo.getTournamentById(team.tournament_id) : null;
+    }
+    if (!tournament) tournament = await repo.getLatestTournament(guildId);
+    const settings = await repo.getSettings(guildId);
+    const access = await getDashboardAccess(req, guildId, tournament, settings);
+    if (access.canAdmin) return next();
+    return res.status(403).send('Only the Discord server admin or the selected tournament host/staff role can manage this tournament.');
+  } catch (err) { next(err); }
+}
 
 app.get('/', (req, res) => res.render('index', { user: req.user }));
 app.get('/login', requireDiscordAuthConfigured, passport.authenticate('discord'));
@@ -52,11 +132,12 @@ app.get('/auth/discord/callback', requireDiscordAuthConfigured, passport.authent
 app.get('/logout', (req, res, next) => req.logout(err => err ? next(err) : res.redirect('/')));
 
 app.get('/dashboard', requireAuth, (req, res) => {
-  const guilds = (req.user.guilds || []).filter(g => (BigInt(g.permissions || 0) & BigInt(0x20)) || (BigInt(g.permissions || 0) & BigInt(0x8)));
+  // Show all mutual guilds. Access inside each guild is split between viewer and host/admin controls.
+  const guilds = (req.user.guilds || []);
   res.render('dashboard', { user: req.user, guilds });
 });
 
-app.get('/guild/:guildId', requireAuth, ensureGuildAdmin, async (req, res, next) => {
+app.get('/guild/:guildId', requireAuth, ensureGuildMember, async (req, res, next) => {
   try {
     const guildId = req.params.guildId;
     const tournaments = await repo.getActiveTournaments(guildId);
@@ -68,17 +149,19 @@ app.get('/guild/:guildId', requireAuth, ensureGuildAdmin, async (req, res, next)
     const bracketText = validTournament ? await engine.renderBracket(validTournament) : null;
     const data = validTournament ? await engine.getBracketView(validTournament) : { teams: [], matches: [] };
     const logs = validTournament ? await repo.getLogs(validTournament.id, 25) : [];
-    res.render('guild', { guildId, settings, tournaments, tournament: validTournament, bracketText, data, logs });
+    const access = await getDashboardAccess(req, guildId, validTournament, settings);
+    if (!access.canView) return res.status(403).send('Access denied. You need the selected tournament registration role to view this bracket, or the host/staff role to manage it.');
+    res.render('guild', { guildId, settings, tournaments, tournament: validTournament, bracketText, data, logs, access, user: req.user });
   } catch (err) { next(err); }
 });
 
-app.post('/guild/:guildId/reset', requireAuth, ensureGuildAdmin, async (req, res, next) => {
+app.post('/guild/:guildId/reset', requireAuth, ensureGuildDashboardAdmin, async (req, res, next) => {
   try { const id = req.body.tournament_id ? Number(req.body.tournament_id) : null; await repo.resetTournament(req.params.guildId, id); res.redirect(`/guild/${req.params.guildId}`); } catch (err) { next(err); }
 });
-app.post('/guild/:guildId/start', requireAuth, ensureGuildAdmin, async (req, res, next) => {
+app.post('/guild/:guildId/start', requireAuth, ensureGuildDashboardAdmin, async (req, res, next) => {
   try { const t = await repo.getTournamentById(Number(req.body.tournament_id)); if (t && t.guild_id === req.params.guildId && t.status === 'registration') await engine.startBracket(t); res.redirect(`/guild/${req.params.guildId}?tournament_id=${t?.id || ''}`); } catch (err) { next(err); }
 });
-app.post('/guild/:guildId/approve', requireAuth, ensureGuildAdmin, async (req, res, next) => {
+app.post('/guild/:guildId/approve', requireAuth, ensureGuildDashboardAdmin, async (req, res, next) => {
   try {
     const match = await repo.getMatch(Number(req.body.match_id));
     const t = match ? await repo.getTournamentById(match.tournament_id) : null;
@@ -89,7 +172,7 @@ app.post('/guild/:guildId/approve', requireAuth, ensureGuildAdmin, async (req, r
     res.redirect(`/guild/${req.params.guildId}?tournament_id=${t?.id || ''}`);
   } catch (err) { next(err); }
 });
-app.post('/guild/:guildId/force', requireAuth, ensureGuildAdmin, async (req, res, next) => {
+app.post('/guild/:guildId/force', requireAuth, ensureGuildDashboardAdmin, async (req, res, next) => {
   try {
     const match = await repo.getMatch(Number(req.body.match_id));
     const t = match ? await repo.getTournamentById(match.tournament_id) : null;
@@ -101,7 +184,7 @@ app.post('/guild/:guildId/force', requireAuth, ensureGuildAdmin, async (req, res
     res.redirect(`/guild/${req.params.guildId}?tournament_id=${t?.id || ''}`);
   } catch (err) { next(err); }
 });
-app.post('/guild/:guildId/remove-team', requireAuth, ensureGuildAdmin, async (req, res, next) => {
+app.post('/guild/:guildId/remove-team', requireAuth, ensureGuildDashboardAdmin, async (req, res, next) => {
   try {
     const teamId = Number(req.body.team_id);
     const team = await repo.getTeam(teamId);
@@ -110,7 +193,7 @@ app.post('/guild/:guildId/remove-team', requireAuth, ensureGuildAdmin, async (re
     res.redirect(`/guild/${req.params.guildId}?tournament_id=${tournament?.id || ''}`);
   } catch (err) { next(err); }
 });
-app.post('/guild/:guildId/edit-team', requireAuth, ensureGuildAdmin, async (req, res, next) => {
+app.post('/guild/:guildId/edit-team', requireAuth, ensureGuildDashboardAdmin, async (req, res, next) => {
   try {
     const teamId = Number(req.body.team_id);
     const name = String(req.body.name || '').trim().slice(0, 80);
