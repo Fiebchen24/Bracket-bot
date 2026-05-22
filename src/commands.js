@@ -12,7 +12,7 @@ module.exports = [
     .addIntegerOption(o => o.setName('team_size').setDescription('Team size').setRequired(true).addChoices(
       {name:'1v1', value:1},{name:'2v2', value:2},{name:'3v3', value:3},{name:'4v4', value:4}))
     .addStringOption(o => o.setName('format').setDescription('Bracket format').setRequired(true).addChoices(
-      {name:'Single Elimination', value:'single'}, {name:'Double Elimination', value:'double'}))
+      {name:'Single Elimination', value:'single'}, {name:'Double Elimination', value:'double'}, {name:'Round Robin', value:'round_robin'}))
     .addChannelOption(o => o.setName('signup_channel').setDescription('Channel where teams register').setRequired(true).addChannelTypes(ChannelType.GuildText))
     .addChannelOption(o => o.setName('bracket_channel').setDescription('Channel where the bracket is posted').setRequired(true).addChannelTypes(ChannelType.GuildText))
     .addRoleOption(o => o.setName('staff_role').setDescription('Staff role for this tournament').setRequired(true))

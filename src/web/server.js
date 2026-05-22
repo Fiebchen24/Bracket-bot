@@ -101,6 +101,35 @@ async function getDashboardAccess(req, guildId, tournament = null, settings = nu
     accessMode: canAdmin ? 'admin' : canPlayerView ? 'player' : 'denied'
   };
 }
+
+async function discordApi(path) {
+  if (!config.token) return null;
+  try {
+    const response = await fetch(`https://discord.com/api/v10${path}`, { headers: { Authorization: `Bot ${config.token}` } });
+    if (!response.ok) return null;
+    return await response.json();
+  } catch (err) {
+    console.warn('Discord API lookup failed:', err.message);
+    return null;
+  }
+}
+async function getGuildMeta(guildId, tournament = null) {
+  const guild = await discordApi(`/guilds/${guildId}`);
+  const ids = [tournament?.signup_channel_id, tournament?.bracket_channel_id, tournament?.checkin_channel_id, tournament?.match_category_id].filter(Boolean);
+  const roleIds = [tournament?.staff_role_id, tournament?.registration_role_id].filter(Boolean);
+  const channels = {};
+  for (const id of ids) {
+    const ch = await discordApi(`/channels/${id}`);
+    if (ch) channels[id] = ch.name ? `#${ch.name}` : id;
+  }
+  const roles = {};
+  if (roleIds.length) {
+    const allRoles = await discordApi(`/guilds/${guildId}/roles`);
+    if (Array.isArray(allRoles)) for (const r of allRoles) roles[r.id] = `@${r.name}`;
+  }
+  return { guildName: guild?.name || `Server ${guildId}`, channels, roles };
+}
+
 async function ensureGuildMember(req, res, next) {
   if (userGuild(req, req.params.guildId)) return next();
   return res.status(403).send('You must be a member of this Discord server to view this dashboard.');
@@ -151,7 +180,8 @@ app.get('/guild/:guildId', requireAuth, ensureGuildMember, async (req, res, next
     const logs = validTournament ? await repo.getLogs(validTournament.id, 25) : [];
     const access = await getDashboardAccess(req, guildId, validTournament, settings);
     if (!access.canView) return res.status(403).send('Access denied. You need the selected tournament registration role to view this bracket, or the host/staff role to manage it.');
-    res.render('guild', { guildId, settings, tournaments, tournament: validTournament, bracketText, data, logs, access, user: req.user });
+    const meta = await getGuildMeta(guildId, validTournament);
+    res.render('guild', { guildId, meta, settings, tournaments, tournament: validTournament, bracketText, data, logs, access, user: req.user });
   } catch (err) { next(err); }
 });
 

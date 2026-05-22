@@ -38,7 +38,36 @@ async function startDouble(tournament) {
 }
 
 async function startBracket(tournament) {
-  return tournament.format === 'double' ? startDouble(tournament) : startSingle(tournament);
+  if (tournament.format === 'double') return startDouble(tournament);
+  if (tournament.format === 'round_robin') return startRoundRobin(tournament);
+  return startSingle(tournament);
+}
+
+async function startRoundRobin(tournament) {
+  const teams = await repo.getTeams(tournament.id);
+  const teamIds = teams.filter(t => t.active).map(t => t.id);
+  const existing = await repo.getMatches(tournament.id);
+  if (existing.length) return existing;
+  let matchNo = 1;
+  const created = [];
+  // Circle-method style rounds: every team plays every other team once.
+  const arr = [...teamIds];
+  if (arr.length % 2 === 1) arr.push(null);
+  const n = arr.length;
+  const rounds = n - 1;
+  for (let r = 1; r <= rounds; r++) {
+    for (let i = 0; i < n / 2; i++) {
+      const a = arr[i];
+      const b = arr[n - 1 - i];
+      if (a && b) created.push(await repo.createMatch(tournament.id, r, matchNo++, a, b, 'pending', null, 'round_robin'));
+    }
+    const fixed = arr[0];
+    const rest = arr.slice(1);
+    rest.unshift(rest.pop());
+    arr.splice(0, arr.length, fixed, ...rest);
+  }
+  await repo.updateTournament(tournament.id, { status: 'running' });
+  return created;
 }
 
 async function winnersOfRound(tournamentId, group, round) {

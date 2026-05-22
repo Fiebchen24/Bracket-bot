@@ -8,7 +8,7 @@
 <main class="card wide">
   <a href="/dashboard">← Back</a>
   <h1>Bracket Events</h1>
-  <p>Guild ID: <code><%= guildId %></code> · <b><%= access && access.canAdmin ? "Host/Admin view" : (access && access.hasRegistrationRole ? "Player view" : "No tournament access") %></b></p>
+  <p><b>Server:</b> <%= meta && meta.guildName ? meta.guildName : guildId %> · <span class="badge <%= access && access.canAdmin ? 'reported' : 'pending' %>"><%= access && access.canAdmin ? 'Host/Admin view' : (access && access.canView ? 'Player view' : 'No access') %></span></p>
 
   <% function playerLabel(p){ if(!p) return ''; if(typeof p === 'string') return p; return p.displayName || p.username || p.id || ''; } %>
   <% function playerAvatar(p){ if(!p || typeof p === 'string') return null; return p.avatarUrl || null; } %>
@@ -35,8 +35,10 @@
       <div>
         <h2>#<%= tournament.id %> <%= tournament.name %></h2>
         <p><b><%= tournament.team_size %>v<%= tournament.team_size %></b> · <%= tournament.format %> · <%= tournament.status %></p>
-        <p>Signup <code><%= tournament.signup_channel_id %></code> · Bracket <code><%= tournament.bracket_channel_id %></code> · Check-in <b><%= tournament.require_checkin ? 'required' : 'off' %></b></p>
-        <% if(tournament.registration_role_id){ %><p>Registration role: <code><%= tournament.registration_role_id %></code></p><% } %>
+        <p>Signup: <b><%= meta.channels[tournament.signup_channel_id] || tournament.signup_channel_id %></b> · Bracket: <b><%= meta.channels[tournament.bracket_channel_id] || tournament.bracket_channel_id %></b> · Check-in: <b><%= tournament.require_checkin ? (meta.channels[tournament.checkin_channel_id] || 'required') : 'Off' %></b></p>
+        <% if(tournament.match_category_id){ %><p>Matches: <b><%= meta.channels[tournament.match_category_id] || tournament.match_category_id %></b></p><% } %>
+        <% if(tournament.registration_role_id){ %><p>Registration Role: <b><%= meta.roles[tournament.registration_role_id] || tournament.registration_role_id %></b></p><% } %>
+        <% if(tournament.staff_role_id){ %><p>Host/Staff Role: <b><%= meta.roles[tournament.staff_role_id] || tournament.staff_role_id %></b></p><% } %>
       </div>
       <% if(access && access.canAdmin){ %>
       <div class="actions">
