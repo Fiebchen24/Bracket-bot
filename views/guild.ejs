@@ -99,18 +99,45 @@
     </section>
 
     <section class="panel bracket-panel">
-      <h2>Graphic Bracket Tree</h2>
-      <% const groups = ['winners','losers','grand']; const labels = {winners:'Winner Bracket', losers:'Loser Bracket', grand:'Grand Final'}; %>
+      <% if(tournament.format === 'round_robin'){ %>
+        <h2>Round Robin Standings</h2>
+        <%
+          const stats = new Map();
+          data.teams.forEach(t => stats.set(t.id, {team:t, played:0, wins:0, losses:0}));
+          data.matches.forEach(m => {
+            if(m.status === 'approved' || m.status === 'bye'){
+              const ids = [m.team1_id, m.team2_id].filter(Boolean);
+              ids.forEach(id => { if(stats.has(id)) stats.get(id).played++; });
+              if(m.winner_team_id && stats.has(m.winner_team_id)) stats.get(m.winner_team_id).wins++;
+              ids.filter(id => id !== m.winner_team_id).forEach(id => { if(stats.has(id)) stats.get(id).losses++; });
+            }
+          });
+          const standings = Array.from(stats.values()).sort((a,b)=> b.wins-a.wins || a.losses-b.losses || a.team.name.localeCompare(b.team.name));
+        %>
+        <table class="round-robin-table">
+          <thead><tr><th>#</th><th>Team</th><th>Played</th><th>Wins</th><th>Losses</th></tr></thead>
+          <tbody>
+          <% standings.forEach((row,i)=>{ %>
+            <tr><td><%= i+1 %></td><td><span class="rr-team"><% if(teamAvatar(row.team)){ %><img class="avatar sm" src="<%= teamAvatar(row.team) %>" alt=""><% } %><b><%= row.team.name %></b></span></td><td><%= row.played %></td><td><%= row.wins %></td><td><%= row.losses %></td></tr>
+          <% }) %>
+          </tbody>
+        </table>
+        <h2 style="margin-top:24px">Round Robin Matches</h2>
+      <% } else { %>
+        <h2>Graphic Bracket Tree</h2>
+      <% } %>
+      <% const groups = tournament.format === 'round_robin' ? ['round_robin'] : ['winners','losers','grand']; const labels = {winners:'Winner Bracket', losers:'Loser Bracket', grand:'Grand Final', round_robin:'Matches'}; %>
       <% groups.forEach(group=>{ const gm = data.matches.filter(m => (m.bracket_group || 'winners') === group); if(!gm.length) return; const rounds = [...new Set(gm.map(m=>m.round))].sort((a,b)=>a-b); %>
         <div class="bracket-section <%= group %>">
           <h3><%= labels[group] %></h3>
-          <div class="bracket-scroll">
-            <div class="bracket-tree">
-              <% rounds.forEach(round=>{ const rm = gm.filter(m=>m.round===round); %>
-                <div class="round-column">
+          <div class="bracket-scroll svg-bracket-scroll">
+            <svg class="connector-svg" aria-hidden="true"></svg>
+            <div class="bracket-tree svg-bracket-tree">
+              <% rounds.forEach(round=>{ const rm = gm.filter(m=>m.round===round).sort((a,b)=>a.match_number-b.match_number); %>
+                <div class="round-column" data-round="<%= round %>">
                   <div class="round-title">Round <%= round %></div>
-                  <% rm.forEach(match=>{ %>
-                    <div class="match-box <%= match.status %>">
+                  <% rm.forEach((match, idx)=>{ %>
+                    <div class="match-box <%= match.status %>" data-match-index="<%= idx %>">
                       <div class="match-top"><span class="match-id">#<%= match.id %> · M<%= match.match_number %></span><span class="badge <%= match.status %>"><%= matchStatus(match) %></span></div>
                       <% [match.team1, match.team2].forEach((tm, idx)=>{ const isWinner = tm && match.winner_team_id === tm.id; const av = tm ? teamAvatar(tm) : null; %>
                         <div class="slot <%= isWinner ? 'winner' : '' %> <%= tm ? '' : 'bye-slot' %>">
@@ -147,5 +174,51 @@
     </section>
   <% } %>
 </main>
+
+<script>
+(function(){
+  function drawConnectors(){
+    document.querySelectorAll('.svg-bracket-scroll').forEach(scroll => {
+      const svg = scroll.querySelector('.connector-svg');
+      const tree = scroll.querySelector('.svg-bracket-tree');
+      if(!svg || !tree) return;
+      const columns = Array.from(tree.querySelectorAll('.round-column'));
+      const treeRect = tree.getBoundingClientRect();
+      const width = Math.max(tree.scrollWidth, scroll.scrollWidth);
+      const height = Math.max(tree.scrollHeight, scroll.scrollHeight);
+      svg.setAttribute('width', width);
+      svg.setAttribute('height', height);
+      svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+      svg.innerHTML = '';
+      columns.forEach((col, colIndex) => {
+        const next = columns[colIndex + 1];
+        if(!next) return;
+        const fromMatches = Array.from(col.querySelectorAll('.match-box'));
+        const toMatches = Array.from(next.querySelectorAll('.match-box'));
+        fromMatches.forEach((from, i) => {
+          const to = toMatches[Math.floor(i / 2)] || toMatches[i] || toMatches[0];
+          if(!to) return;
+          const a = from.getBoundingClientRect();
+          const b = to.getBoundingClientRect();
+          const x1 = a.right - treeRect.left;
+          const y1 = a.top + a.height / 2 - treeRect.top;
+          const x2 = b.left - treeRect.left;
+          const y2 = b.top + b.height / 2 - treeRect.top;
+          if(x2 <= x1) return;
+          const mid = x1 + Math.max(28, (x2 - x1) / 2);
+          const p = document.createElementNS('http://www.w3.org/2000/svg','path');
+          p.setAttribute('d', `M ${x1} ${y1} C ${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}`);
+          p.setAttribute('class','connector-path');
+          svg.appendChild(p);
+        });
+      });
+    });
+  }
+  window.addEventListener('load', drawConnectors);
+  window.addEventListener('resize', drawConnectors);
+  document.querySelectorAll('.bracket-scroll').forEach(el => el.addEventListener('scroll', () => requestAnimationFrame(drawConnectors), {passive:true}));
+  setTimeout(drawConnectors, 250);
+})();
+</script>
 </body>
 </html>

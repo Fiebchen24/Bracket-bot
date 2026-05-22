@@ -4,3 +4,17 @@ body{margin:0;background:#0d0d14;color:#f4f4f7;font-family:Arial,Helvetica,sans-
 /* v8.9 dashboard clarity */
 .hero h2{font-size:30px;margin:0 0 10px}.hero p{margin:7px 0}.bracket-scroll{position:relative}.round-column{position:relative}.match-box{position:relative}.match-box::before{content:"";position:absolute;left:-22px;top:50%;width:22px;border-top:2px solid #505080;opacity:.85}.round-column:first-child .match-box::before{display:none}.round-column:not(:last-child)::after{content:"";position:absolute;right:-22px;top:82px;bottom:82px;border-right:2px solid #3c3c66;opacity:.55}.match-box:after{border-top-color:#5e5e92}.badge{display:inline-block}.badge.reported{background:#8d5cff}.badge.pending{background:#138fb1}
 .round-robin-table{width:100%;border-collapse:collapse;margin-top:14px}.round-robin-table th,.round-robin-table td{padding:10px;border-bottom:1px solid #2d2d42;text-align:left}.round-robin-table th{color:#77d7ff;text-transform:uppercase;font-size:12px}.round-robin-table tr:hover{background:#181828}
+/* v8.9.1 real connector lines + round robin */
+.svg-bracket-scroll{position:relative;overflow:auto;max-height:760px;}
+.svg-bracket-tree{position:relative;z-index:2;}
+.connector-svg{position:absolute;left:0;top:0;z-index:1;pointer-events:none;overflow:visible;}
+.connector-path{fill:none;stroke:#6262a0;stroke-width:2.5;stroke-linecap:round;filter:drop-shadow(0 0 4px rgba(98,98,160,.35));}
+.svg-bracket-tree .match-box::before,.svg-bracket-tree .match-box::after,.svg-bracket-tree .round-column::after{display:none!important;}
+.round-column{padding-top:0!important;}
+.svg-bracket-tree .round-column:nth-child(2){margin-top:70px;}
+.svg-bracket-tree .round-column:nth-child(3){margin-top:140px;}
+.svg-bracket-tree .round-column:nth-child(4){margin-top:210px;}
+.svg-bracket-tree .round-column:nth-child(5){margin-top:280px;}
+.bracket-section.round_robin .round-column{margin-top:0!important;}
+.rr-team{display:inline-flex;align-items:center;gap:8px;}
+.round-robin-table td,.round-robin-table th{vertical-align:middle;}

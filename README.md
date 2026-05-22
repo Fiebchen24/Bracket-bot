@@ -1,7 +1,8 @@
-# Bracket Bot Pro v8.5 Core Rebuild
+# Bracket Bot Pro v8.9.1
 
-## Important Render setup
-Use the same GitHub repo for both services, but split modes:
+## Render setup
+
+Use the same GitHub repo for both services:
 
 ### Background Worker
 - Build Command: `npm install`
@@ -13,20 +14,18 @@ Use the same GitHub repo for both services, but split modes:
 - Start Command: `npm start`
 - Env: `SERVICE_MODE=web`
 
-Both services need the same `DATABASE_URL` from Render PostgreSQL.
+Both need `DATABASE_URL`.
 
-## v8.5 fixes
-- Double elimination lower-bracket routing rebuilt
-- Winner final loser now drops into the lower final path instead of fake BYEs
-- Grand Final and reset final handling improved
-- Avoids fake one-player lower-bracket BYE chains
-- `[object Object]` player rendering fixed by normalizing player entries
-- `/unreg` retained
-- Match channels continue to be created for newly generated matches
+## Important after this update
+Round Robin is a slash-command option. Since the worker normally starts with `npm start`, run command deploy once after uploading this version:
 
+Option A: temporarily set the Background Worker Start Command to `npm run deploy && npm start`, deploy once, then set it back to `npm start`.
 
-## v8.6
-- Channel automation sync after every approved/forced/DQ match.
-- `/syncchannels` repair command for staff.
-- Creates missing channels for open matches and cleans finished match channels when auto_archive is enabled.
-- Logs channel creation failures to the bracket channel.
+Option B: run `npm run deploy` locally with DISCORD_TOKEN and CLIENT_ID.
+
+## v8.9.1
+- Round Robin visible in `/createbracket` after slash-command redeploy.
+- Round Robin generator + dashboard standings table.
+- Dashboard header shows server/channel/role names instead of raw IDs when Discord API can resolve them.
+- Bracket connector lines use SVG paths instead of CSS pseudo-lines.
+- Player/host dashboard access remains split: players can view, host/staff can manage.
